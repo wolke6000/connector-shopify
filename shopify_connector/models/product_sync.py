@@ -980,6 +980,7 @@ class ShopifyProductTemplateSync(models.Model):
             image_binding = self.env["shopify.product.image"].search(
                 [
                     ("instance_id", "=", template_binding.instance_id.id),
+                    ("template_binding_id", "=", template_binding.id),
                     ("shopify_id", "=", payload["id"]),
                 ],
                 limit=1,
