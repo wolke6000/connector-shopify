@@ -95,6 +95,37 @@ class TestShopifyFulfillmentSync(TransactionCase):
             }
         )
 
+    def test_fulfillment_export_enabled_by_default(self):
+        self.assertTrue(self.instance.fulfillment_export_enabled)
+
+    def test_picking_validation_skips_fulfillment_when_export_disabled(self):
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+        self.instance.fulfillment_export_enabled = False
+
+        with (
+            patch.object(
+                type(self.order_binding),
+                "with_delay",
+                return_value=self.order_binding,
+            ) as with_delay,
+            patch.object(
+                type(self.order_binding),
+                "_job_push_picking_fulfillment",
+                return_value=True,
+            ) as push,
+        ):
+            picking.button_validate()
+
+        self.assertEqual(picking.state, "done")
+        with_delay.assert_not_called()
+        push.assert_not_called()
+
     def test_picking_validation_enqueues_fulfillment_job(self):
         self.env["stock.quant"]._update_available_quantity(
             self.product, self.warehouse.lot_stock_id, 1
