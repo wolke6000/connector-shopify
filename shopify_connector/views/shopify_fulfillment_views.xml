@@ -263,7 +263,11 @@
                 <page string="Fulfillment" name="fulfillment">
                     <group>
                         <group string="Odoo to Shopify">
-                            <field name="fulfillment_notify_customer" />
+                            <field name="fulfillment_export_enabled" />
+                            <field
+                                name="fulfillment_notify_customer"
+                                invisible="not fulfillment_export_enabled"
+                            />
                             <p class="text-muted">
                                 Completed outgoing deliveries are sent through
                                 Shopify Fulfillment Orders in the background.

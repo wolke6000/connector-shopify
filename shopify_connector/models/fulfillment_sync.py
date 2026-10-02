@@ -708,7 +708,11 @@ class StockPickingShopifyFulfillmentSync(models.Model):
             )
         ):
             bindings = picking.sale_id.shopify_binding_ids.filtered(
-                lambda item: not item.is_draft and item.state == "synced"
+                lambda item: (
+                    not item.is_draft
+                    and item.state == "synced"
+                    and item.instance_id.fulfillment_export_enabled
+                )
             )
             for binding in bindings:
                 binding.with_delay(

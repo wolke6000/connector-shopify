@@ -333,6 +333,15 @@ class ShopifyOrderFulfillmentRelation(models.Model):
 class ShopifyInstanceFulfillmentConfiguration(models.Model):
     _inherit = "shopify.instance"
 
+    fulfillment_export_enabled = fields.Boolean(
+        string="Export Fulfillments to Shopify",
+        default=True,
+        help=(
+            "Create Shopify fulfillments when Odoo outgoing deliveries are "
+            "completed. Disable this when Shopify or an external fulfillment "
+            "provider is authoritative for fulfillment."
+        ),
+    )
     fulfillment_notify_customer = fields.Boolean(
         string="Notify Customer",
         default=True,
