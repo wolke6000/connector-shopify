@@ -412,7 +412,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.instance.write(
             {
                 "order_drift_since": datetime(2026, 10, 1, 8),
-                "draft_order_import_enabled": False,
             }
         )
         client = Mock()
@@ -458,7 +457,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(self.instance.order_drift_since, datetime(2026, 11, 2, 9))
 
     def test_updated_order_drift_skips_current_bindings(self):
-        self.instance.draft_order_import_enabled = False
         self.order_model.create(
             {
                 "instance_id": self.instance.id,
@@ -500,7 +498,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_updated_order_drift_does_not_advance_on_api_error(self):
         original = datetime(2026, 10, 1, 8)
         self.instance.write(
-            {"order_drift_since": original, "draft_order_import_enabled": False}
+            {"order_drift_since": original}
         )
         client = Mock()
         client.execute.side_effect = ShopifyError("Shopify unavailable")
