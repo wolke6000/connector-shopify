@@ -368,8 +368,7 @@ class ShopifyOrderFulfillmentSync(models.Model):
         self = self.sudo()
         self.ensure_one()
         if not (
-            self.instance_id.active
-            and self.instance_id.fulfillment_export_enabled
+            self.instance_id.active and self.instance_id.fulfillment_export_enabled
         ):
             return False
         picking = self.env["stock.picking"].browse(picking_id).exists()
