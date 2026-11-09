@@ -610,10 +610,7 @@ class ShopifyOrderSync(models.Model):
                             sale_order.name,
                         )
                     )
-                if (
-                    sale_order.partner_shipping_id.id
-                    != values["partner_shipping_id"]
-                ):
+                if sale_order.partner_shipping_id.id != values["partner_shipping_id"]:
                     raise ShopifyOrderImportError(
                         self.env._(
                             "Shopify shipping address differs from the confirmed "
