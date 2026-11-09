@@ -529,6 +529,12 @@ class ShopifyInstanceOrderConfig(models.Model):
     )
     order_import_date_from = fields.Date()
     order_import_date_to = fields.Date()
+    order_drift_since = fields.Datetime(
+        string="Sync Orders Updated Since",
+        copy=False,
+        help="Orders updated in Shopify since this timestamp are reconciled. "
+        "Move it back to recheck older order updates.",
+    )
     order_binding_ids = fields.One2many("shopify.order", "instance_id", string="Orders")
     tax_mapping_ids = fields.One2many(
         "shopify.tax.mapping", "instance_id", string="Tax Mappings"
