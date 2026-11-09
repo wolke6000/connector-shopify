@@ -575,9 +575,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         with (
             freeze_time("2026-11-02 09:00:00"),
             trap_jobs() as trap,
-            patch.object(
-                type(self.instance), "_shopify_client", return_value=client
-            ),
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
         ):
             self.assertEqual(self.instance._job_sync_updated_orders(), 1)
         trap.assert_enqueued_job(
@@ -588,9 +586,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
         # The child returns False after persisting an error binding. Its
         # update is older than the next daily scan's one-hour overlap.
-        bad = self._payload(
-            order_id=501, total="10.01", updatedAt=stamp
-        )
+        bad = self._payload(order_id=501, total="10.01", updatedAt=stamp)
         self.assertFalse(self.order_model._job_import_order(self.instance.id, bad))
         binding = self.order_model.search(
             [("instance_id", "=", self.instance.id), ("shopify_id", "=", gid)]
@@ -602,9 +598,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         with (
             freeze_time("2026-11-05 09:00:00"),
             trap_jobs() as trap,
-            patch.object(
-                type(self.instance), "_shopify_client", return_value=client
-            ),
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
         ):
             self.assertEqual(self.instance._job_sync_updated_orders(), 1)
         trap.assert_enqueued_job(
@@ -615,16 +609,12 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
         # A repaired import acknowledges the version on the following scan.
         corrected = self._payload(order_id=501, updatedAt=stamp)
-        self.assertTrue(
-            self.order_model._job_import_order(self.instance.id, corrected)
-        )
+        self.assertTrue(self.order_model._job_import_order(self.instance.id, corrected))
         self.assertEqual(binding.state, "synced")
         with (
             freeze_time("2026-11-06 09:00:00"),
             trap_jobs() as trap,
-            patch.object(
-                type(self.instance), "_shopify_client", return_value=client
-            ),
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
         ):
             self.assertEqual(self.instance._job_sync_updated_orders(), 0)
         self.assertFalse(self.instance.order_drift_pending)
@@ -672,14 +662,18 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_confirmed_order_billing_address_drift_is_actionable(self):
         self.instance.order_confirmation_policy = "auto"
         original = {
-            "firstName": "Ada", "lastName": "Lovelace",
-            "address1": "Billing A", "city": "Vienna",
-            "zip": "1010", "countryCodeV2": "AT",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Billing A",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
         }
         binding_id = self.order_model._job_import_order(
             self.instance.id,
             self._payload(
-                order_id=504, billingAddress=original,
+                order_id=504,
+                billingAddress=original,
                 displayFinancialStatus="PAID",
             ),
         )
@@ -691,7 +685,8 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         result = self.order_model._job_import_order(
             self.instance.id,
             self._payload(
-                order_id=504, billingAddress=changed,
+                order_id=504,
+                billingAddress=changed,
                 updatedAt="2026-11-05T10:00:00Z",
                 displayFinancialStatus="PAID",
             ),
@@ -704,14 +699,18 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_confirmed_order_shipping_address_drift_is_actionable(self):
         self.instance.order_confirmation_policy = "auto"
         original = {
-            "firstName": "Ada", "lastName": "Lovelace",
-            "address1": "Shipping A", "city": "Vienna",
-            "zip": "1010", "countryCodeV2": "AT",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping A",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
         }
         binding_id = self.order_model._job_import_order(
             self.instance.id,
             self._payload(
-                order_id=505, shippingAddress=original,
+                order_id=505,
+                shippingAddress=original,
                 displayFinancialStatus="PAID",
             ),
         )
@@ -723,7 +722,8 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         result = self.order_model._job_import_order(
             self.instance.id,
             self._payload(
-                order_id=505, shippingAddress=changed,
+                order_id=505,
+                shippingAddress=changed,
                 updatedAt="2026-11-05T10:00:00Z",
                 displayFinancialStatus="PAID",
             ),
