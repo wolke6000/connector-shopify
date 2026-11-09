@@ -708,14 +708,17 @@ class ShopifyOrderSync(models.Model):
             for part in (address.get("first_name"), address.get("last_name"))
             if part
         )
+        company = (address.get("company") or "").strip()
+        # Odoo 19 explicitly clears res.partner.company_name when parent_id
+        # is present. Keep Shopify's company in the child contact's name,
+        # where it is retained and appears on delivery/invoice addresses.
+        if company and name:
+            name = f"{company} / {name}"
         return {
             "parent_id": partner.id,
             "company_id": partner.company_id.id,
             "type": address_type,
-            "name": name or address.get("company") or partner.name,
-            # Shopify's company is material even when the recipient has a name.
-            # Keep it separate rather than silently discarding it.
-            "company_name": address.get("company") or False,
+            "name": name or company or partner.name,
             "street": address.get("address1") or False,
             "street2": address.get("address2") or False,
             "city": address.get("city") or False,
@@ -734,7 +737,6 @@ class ShopifyOrderSync(models.Model):
                 normalized(partner[field]) == normalized(values[field])
                 for field in (
                     "name",
-                    "company_name",
                     "street",
                     "street2",
                     "city",
