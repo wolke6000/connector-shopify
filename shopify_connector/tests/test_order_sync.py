@@ -493,9 +493,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_updated_order_drift_does_not_advance_on_api_error(self):
         original = datetime(2026, 10, 1, 8)
-        self.instance.write(
-            {"order_drift_since": original}
-        )
+        self.instance.write({"order_drift_since": original})
         client = Mock()
         client.execute.side_effect = ShopifyError("Shopify unavailable")
         with (
