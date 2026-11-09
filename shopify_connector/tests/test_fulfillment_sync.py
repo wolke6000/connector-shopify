@@ -322,15 +322,18 @@ class TestShopifyFulfillmentSync(TransactionCase):
                 "status": "SUCCESS",
                 "order": {"id": self.order_binding.shopify_id},
                 "trackingInfo": {"number": "TRACK-UPDATED"},
-                "fulfillmentLineItems": {"nodes": [
-                    {"lineItem": {"id": self.line_binding.shopify_id}, "quantity": 1}
-                ]},
+                "fulfillmentLineItems": {
+                    "nodes": [
+                        {
+                            "lineItem": {"id": self.line_binding.shopify_id},
+                            "quantity": 1,
+                        }
+                    ]
+                },
             }
         }
         with (
-            patch.object(
-                type(self.instance), "_shopify_client", return_value=client
-            ),
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
             patch.object(type(picking), "button_validate") as validate,
             patch.object(type(picking), "_action_done") as action_done,
         ):
