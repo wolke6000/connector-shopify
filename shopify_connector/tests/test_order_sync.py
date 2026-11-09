@@ -1,4 +1,10 @@
-from unittest.mock import patch
+from datetime import datetime
+from unittest.mock import Mock, patch
+
+from freezegun import freeze_time
+
+from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.lib.client import ShopifyError
 
 from odoo import SUPERUSER_ID
 
@@ -402,3 +408,116 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(refund), 1)
         self.assertEqual(refund.move_id.move_type, "out_refund")
         self.assertEqual(refund.move_id.state, "posted")
+
+    def test_updated_order_drift_pages_and_advances_cursor(self):
+        self.instance.write(
+            {"order_drift_since": datetime(2026, 10, 1, 8), "draft_order_import_enabled": False}
+        )
+        client = Mock()
+        client.execute.side_effect = [
+            {"orders": {"nodes": [
+                {"id": "gid://shopify/Order/101", "name": "#101", "updatedAt": "2026-10-10T10:00:00Z"}
+            ], "pageInfo": {"hasNextPage": True, "endCursor": "next"}}},
+            {"orders": {"nodes": [
+                {"id": "gid://shopify/Order/102", "name": "#102", "updatedAt": "2026-10-10T10:00:00Z"}
+            ], "pageInfo": {"hasNextPage": False}}},
+        ]
+        with (
+            freeze_time("2026-11-02 09:00:00"),
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            count = self.instance._job_sync_updated_orders()
+        self.assertEqual(count, 2)
+        search = "updated_at:>='2026-10-01T07:00:00Z'"
+        self.assertEqual(
+            [call.args[1] for call in client.execute.call_args_list],
+            [{"after": None, "query": search}, {"after": "next", "query": search}],
+        )
+        trap.assert_jobs_count(2, only=self.order_model._job_import_order_from_api)
+        self.assertEqual(self.instance.order_drift_since, datetime(2026, 11, 2, 9))
+
+    def test_updated_order_drift_skips_current_bindings(self):
+        self.instance.draft_order_import_enabled = False
+        self.order_model.create({
+            "instance_id": self.instance.id,
+            "shopify_id": "gid://shopify/Order/101",
+            "order_name": "#101",
+            "external_updated_at": datetime(2026, 11, 1, 10),
+            "state": "synced",
+        })
+        client = Mock()
+        client.execute.return_value = {"orders": {"nodes": [
+            {"id": "gid://shopify/Order/101", "name": "#101", "updatedAt": "2026-10-10T10:00:00Z"},
+            {"id": "gid://shopify/Order/102", "name": "#102", "updatedAt": "2026-11-02T10:00:00Z"},
+        ], "pageInfo": {"hasNextPage": False}}}
+        with (
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            count = self.instance._job_sync_updated_orders()
+        self.assertEqual(count, 1)
+        trap.assert_enqueued_job(
+            self.order_model._job_import_order_from_api,
+            args=(self.instance.id, "gid://shopify/Order/102"),
+        )
+
+    def test_updated_order_drift_does_not_advance_on_api_error(self):
+        original = datetime(2026, 10, 1, 8)
+        self.instance.write({"order_drift_since": original, "draft_order_import_enabled": False})
+        client = Mock()
+        client.execute.side_effect = ShopifyError("Shopify unavailable")
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            self.assertRaises(ShopifyError),
+        ):
+            self.instance._job_sync_updated_orders()
+        self.assertEqual(self.instance.order_drift_since, original)
+
+    def test_order_import_uses_distinct_shipping_and_invoice_addresses(self):
+        shipping = {
+            "firstName": "Ada", "lastName": "Lovelace", "address1": "Shipping 1",
+            "city": "Vienna", "zip": "1010", "countryCodeV2": "AT",
+        }
+        billing = {**shipping, "address1": "Billing 2"}
+        payload = self._payload(
+            order_id=109, shippingAddress=shipping, billingAddress=billing
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        order = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(order.partner_shipping_id.street, "Shipping 1")
+        self.assertEqual(order.partner_invoice_id.street, "Billing 2")
+        self.assertNotEqual(order.partner_shipping_id, order.partner_invoice_id)
+
+    def test_reimported_order_does_not_duplicate_address_contacts(self):
+        address = {
+            "firstName": "Ada", "lastName": "Lovelace", "address1": "Shipping 1",
+            "city": "Vienna", "zip": "1010", "countryCodeV2": "AT",
+        }
+        payload = self._payload(
+            order_id=110, shippingAddress=address, billingAddress=address
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        order = self.order_model.browse(binding_id).odoo_id
+        before = order.partner_id.child_ids
+        payload["updatedAt"] = "2026-01-11T10:00:00Z"
+        self.order_model._job_import_order(self.instance.id, payload)
+        self.assertEqual(order.partner_id.child_ids, before)
+        self.assertEqual(order.partner_shipping_id, order.partner_invoice_id)
+
+    def test_cancelled_confirmed_order_keeps_lines(self):
+        self.instance.order_confirmation_policy = "auto"
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(order_id=111, displayFinancialStatus="PAID"),
+        )
+        order = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(order.state, "sale")
+        payload = self._payload(
+            order_id=111, quantity=0, total="0.00",
+            cancelledAt="2026-01-12T10:00:00Z",
+            updatedAt="2026-01-12T10:00:00Z",
+        )
+        self.assertTrue(self.order_model._job_import_order(self.instance.id, payload))
+        self.assertEqual(order.state, "cancel")
+        self.assertEqual(order.order_line.product_uom_qty, 1)
