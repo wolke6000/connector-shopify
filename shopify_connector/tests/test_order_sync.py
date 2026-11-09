@@ -586,7 +586,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
         # The child returns False after persisting an error binding. Its
         # update is older than the next daily scan's one-hour overlap.
-        bad = self._payload(order_id=501, total="10.01", updatedAt=stamp)
+        bad = self._payload(order_id=501, total="10.02", updatedAt=stamp)
         self.assertFalse(self.order_model._job_import_order(self.instance.id, bad))
         binding = self.order_model.search(
             [("instance_id", "=", self.instance.id), ("shopify_id", "=", gid)]
