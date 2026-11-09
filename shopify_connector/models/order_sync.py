@@ -123,13 +123,72 @@ class ShopifyInstanceOrderSync(models.Model):
         self.ensure_one()
         if not self.active:
             return 0
+        # Serialize manual and scheduled reconciliation for this instance.
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+            (self.id, "shopify.orders.reconcile"),
+        )
+        self.invalidate_recordset(["order_drift_since", "order_drift_pending"])
         started = fields.Datetime.now()
         since = (
             self.order_drift_since or started - ORDER_DRIFT_DEFAULT_WINDOW
         ) - ORDER_DRIFT_OVERLAP
+
+        # Both the durable pending ledger and the cursor are saved in the
+        # transaction that enqueues the imports. An import returning False,
+        # failing, or never running must not lose its coverage when the cursor
+        # advances past that Shopify update.
         orders = self._orders_not_imported_yet(self._fetch_updated_orders(since))
-        count = self._queue_order_imports(orders)
-        self.order_drift_since = started
+        pending = dict(self.order_drift_pending or {})
+        names = {}
+        for order in orders:
+            gid = order["id"]
+            stamp = _utc_datetime(order.get("updatedAt"))
+            if not stamp:
+                raise ShopifyOrderImportError(
+                    self.env._("Shopify order %s has no updatedAt.", gid)
+                )
+            names[gid] = order.get("name") or gid
+            if gid not in pending or stamp > _utc_datetime(pending[gid]):
+                pending[gid] = stamp.isoformat()
+
+        if pending:
+            imported = self.env["shopify.order"].search(
+                [
+                    ("instance_id", "=", self.id),
+                    ("shopify_id", "in", list(pending)),
+                    ("state", "=", "synced"),
+                ]
+            )
+            for binding in imported:
+                if (
+                    binding.external_updated_at
+                    and binding.external_updated_at
+                    >= _utc_datetime(pending[binding.shopify_id])
+                ):
+                    del pending[binding.shopify_id]
+
+        count = self._queue_order_imports(
+            [{"id": gid, "name": names.get(gid, gid)} for gid in pending]
+        )
+        self.write(
+            {
+                "order_drift_since": started,
+                "order_drift_pending": pending,
+            }
+        )
+        if pending:
+            self._write_log(
+                entity="drift_orders",
+                direction="import",
+                level="warning",
+                message=self.env._(
+                    "%s Shopify order update(s) remain unacknowledged and "
+                    "will be retried on future reconciliation runs.",
+                    len(pending),
+                ),
+                record=self,
+            )
         return count
 
     def _orders_not_imported_yet(self, orders):
