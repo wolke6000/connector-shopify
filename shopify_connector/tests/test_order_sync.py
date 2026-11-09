@@ -3,12 +3,11 @@ from unittest.mock import Mock, patch
 
 from freezegun import freeze_time
 
-from odoo.addons.queue_job.tests.common import trap_jobs
-from odoo.addons.shopify_connector.lib.client import ShopifyError
-
 from odoo import SUPERUSER_ID
 
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
+from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.lib.client import ShopifyError
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -411,16 +410,37 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_updated_order_drift_pages_and_advances_cursor(self):
         self.instance.write(
-            {"order_drift_since": datetime(2026, 10, 1, 8), "draft_order_import_enabled": False}
+            {
+                "order_drift_since": datetime(2026, 10, 1, 8),
+                "draft_order_import_enabled": False,
+            }
         )
         client = Mock()
         client.execute.side_effect = [
-            {"orders": {"nodes": [
-                {"id": "gid://shopify/Order/101", "name": "#101", "updatedAt": "2026-10-10T10:00:00Z"}
-            ], "pageInfo": {"hasNextPage": True, "endCursor": "next"}}},
-            {"orders": {"nodes": [
-                {"id": "gid://shopify/Order/102", "name": "#102", "updatedAt": "2026-10-10T10:00:00Z"}
-            ], "pageInfo": {"hasNextPage": False}}},
+            {
+                "orders": {
+                    "nodes": [
+                        {
+                            "id": "gid://shopify/Order/101",
+                            "name": "#101",
+                            "updatedAt": "2026-10-10T10:00:00Z",
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "next"},
+                }
+            },
+            {
+                "orders": {
+                    "nodes": [
+                        {
+                            "id": "gid://shopify/Order/102",
+                            "name": "#102",
+                            "updatedAt": "2026-10-10T10:00:00Z",
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                }
+            },
         ]
         with (
             freeze_time("2026-11-02 09:00:00"),
@@ -439,18 +459,33 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_updated_order_drift_skips_current_bindings(self):
         self.instance.draft_order_import_enabled = False
-        self.order_model.create({
-            "instance_id": self.instance.id,
-            "shopify_id": "gid://shopify/Order/101",
-            "order_name": "#101",
-            "external_updated_at": datetime(2026, 11, 1, 10),
-            "state": "synced",
-        })
+        self.order_model.create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Order/101",
+                "order_name": "#101",
+                "external_updated_at": datetime(2026, 11, 1, 10),
+                "state": "synced",
+            }
+        )
         client = Mock()
-        client.execute.return_value = {"orders": {"nodes": [
-            {"id": "gid://shopify/Order/101", "name": "#101", "updatedAt": "2026-10-10T10:00:00Z"},
-            {"id": "gid://shopify/Order/102", "name": "#102", "updatedAt": "2026-11-02T10:00:00Z"},
-        ], "pageInfo": {"hasNextPage": False}}}
+        client.execute.return_value = {
+            "orders": {
+                "nodes": [
+                    {
+                        "id": "gid://shopify/Order/101",
+                        "name": "#101",
+                        "updatedAt": "2026-10-10T10:00:00Z",
+                    },
+                    {
+                        "id": "gid://shopify/Order/102",
+                        "name": "#102",
+                        "updatedAt": "2026-11-02T10:00:00Z",
+                    },
+                ],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
         with (
             trap_jobs() as trap,
             patch.object(type(self.instance), "_shopify_client", return_value=client),
@@ -464,7 +499,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_updated_order_drift_does_not_advance_on_api_error(self):
         original = datetime(2026, 10, 1, 8)
-        self.instance.write({"order_drift_since": original, "draft_order_import_enabled": False})
+        self.instance.write(
+            {"order_drift_since": original, "draft_order_import_enabled": False}
+        )
         client = Mock()
         client.execute.side_effect = ShopifyError("Shopify unavailable")
         with (
@@ -476,8 +513,12 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_order_import_uses_distinct_shipping_and_invoice_addresses(self):
         shipping = {
-            "firstName": "Ada", "lastName": "Lovelace", "address1": "Shipping 1",
-            "city": "Vienna", "zip": "1010", "countryCodeV2": "AT",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping 1",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
         }
         billing = {**shipping, "address1": "Billing 2"}
         payload = self._payload(
@@ -491,8 +532,12 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
     def test_reimported_order_does_not_duplicate_address_contacts(self):
         address = {
-            "firstName": "Ada", "lastName": "Lovelace", "address1": "Shipping 1",
-            "city": "Vienna", "zip": "1010", "countryCodeV2": "AT",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping 1",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
         }
         payload = self._payload(
             order_id=110, shippingAddress=address, billingAddress=address
@@ -514,7 +559,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         order = self.order_model.browse(binding_id).odoo_id
         self.assertEqual(order.state, "sale")
         payload = self._payload(
-            order_id=111, quantity=0, total="0.00",
+            order_id=111,
+            quantity=0,
+            total="0.00",
             cancelledAt="2026-01-12T10:00:00Z",
             updatedAt="2026-01-12T10:00:00Z",
         )
