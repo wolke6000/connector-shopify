@@ -12,9 +12,11 @@ from ..graphql.order import (
     DRAFT_ORDER_BY_ID_QUERY,
     DRAFT_ORDERS_QUERY,
     ORDER_BY_ID_QUERY,
+    ORDERS_UPDATED_QUERY,
     REFUND_BY_ID_QUERY,
     RETURN_BY_ID_QUERY,
     orders_bulk_query,
+    orders_updated_search,
 )
 from ..lib.bulk import ShopifyBulkRunner
 from ..lib.order import (
@@ -27,6 +29,9 @@ from ..lib.order import (
     shopify_gid,
 )
 from .webhook_event import WEBHOOK_HANDLERS
+
+ORDER_DRIFT_DEFAULT_WINDOW = timedelta(days=2)
+ORDER_DRIFT_OVERLAP = timedelta(hours=1)
 
 
 class ShopifyOrderImportError(UserError):
@@ -104,21 +109,136 @@ class ShopifyInstanceOrderSync(models.Model):
                     "Reconcile Shopify orders for %s", instance.name
                 ),
                 identity_key=f"shopify.orders.reconcile.{instance.id}",
-            )._job_fetch_orders_bulk(
-                fields.Date.to_string(
-                    fields.Date.context_today(instance) - timedelta(days=2)
-                ),
-                False,
-            )
+            )._job_sync_updated_orders()
             instance._write_log(
                 entity="drift_orders",
                 direction="import",
                 level="info",
-                message=self.env._(
-                    "Daily order drift reconciliation queued with a two-day overlap."
-                ),
+                message=self.env._("Updated Shopify orders reconciliation queued."),
                 record=instance,
             )
+
+    def _job_sync_updated_orders(self):
+        self = self.sudo()
+        self.ensure_one()
+        if not self.active:
+            return 0
+        # Serialize manual and scheduled reconciliation for this instance.
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+            (self.id, "shopify.orders.reconcile"),
+        )
+        self.invalidate_recordset(["order_drift_since", "order_drift_pending"])
+        started = fields.Datetime.now()
+        since = (
+            self.order_drift_since or started - ORDER_DRIFT_DEFAULT_WINDOW
+        ) - ORDER_DRIFT_OVERLAP
+
+        # Both the durable pending ledger and the cursor are saved in the
+        # transaction that enqueues the imports. An import returning False,
+        # failing, or never running must not lose its coverage when the cursor
+        # advances past that Shopify update.
+        orders = self._orders_not_imported_yet(self._fetch_updated_orders(since))
+        pending = dict(self.order_drift_pending or {})
+        names = {}
+        for order in orders:
+            gid = order["id"]
+            stamp = _utc_datetime(order.get("updatedAt"))
+            if not stamp:
+                raise ShopifyOrderImportError(
+                    self.env._("Shopify order %s has no updatedAt.", gid)
+                )
+            names[gid] = order.get("name") or gid
+            if gid not in pending or stamp > _utc_datetime(pending[gid]):
+                pending[gid] = stamp.isoformat()
+
+        if pending:
+            imported = self.env["shopify.order"].search(
+                [
+                    ("instance_id", "=", self.id),
+                    ("shopify_id", "in", list(pending)),
+                    ("state", "=", "synced"),
+                ]
+            )
+            for binding in imported:
+                if (
+                    binding.external_updated_at
+                    and binding.external_updated_at
+                    >= _utc_datetime(pending[binding.shopify_id])
+                ):
+                    del pending[binding.shopify_id]
+
+        count = self._queue_order_imports(
+            [{"id": gid, "name": names.get(gid, gid)} for gid in pending]
+        )
+        self.write(
+            {
+                "order_drift_since": started,
+                "order_drift_pending": pending,
+            }
+        )
+        if pending:
+            self._write_log(
+                entity="drift_orders",
+                direction="import",
+                level="warning",
+                message=self.env._(
+                    "%s Shopify order update(s) remain unacknowledged and "
+                    "will be retried on future reconciliation runs.",
+                    len(pending),
+                ),
+                record=self,
+            )
+        return count
+
+    def _orders_not_imported_yet(self, orders):
+        imported = {
+            binding.shopify_id: binding.external_updated_at
+            for binding in self.env["shopify.order"].search(
+                [
+                    ("instance_id", "=", self.id),
+                    ("shopify_id", "in", [order["id"] for order in orders]),
+                    ("state", "=", "synced"),
+                ]
+            )
+        }
+        return [
+            order
+            for order in orders
+            if not imported.get(order["id"])
+            or not order.get("updatedAt")
+            or imported[order["id"]] < _utc_datetime(order["updatedAt"])
+        ]
+
+    def _fetch_updated_orders(self, since):
+        search = orders_updated_search(since)
+        orders = []
+        after = None
+        while True:
+            data = self._shopify_client().execute(
+                ORDERS_UPDATED_QUERY, {"after": after, "query": search}
+            )
+            connection = data.get("orders") or {}
+            orders.extend(connection.get("nodes") or [])
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                return orders
+            after = page_info.get("endCursor")
+            if not after:
+                raise ShopifyOrderImportError(
+                    self.env._("Shopify returned an invalid order page cursor.")
+                )
+
+    def _queue_order_imports(self, orders):
+        """Enqueue updated-order imports with the same deduplication key as bulk."""
+        for order in orders:
+            self.env["shopify.order"].with_delay(
+                description=self.env._(
+                    "Import Shopify order %s", order.get("name") or order["id"]
+                ),
+                identity_key=f"shopify.order.import.{self.id}.{order['id']}",
+            )._job_import_order_from_api(self.id, order["id"])
+        return len(orders)
 
     def _job_fetch_orders_bulk(self, date_from=False, date_to=False):
         self = self.sudo()
@@ -424,6 +544,9 @@ class ShopifyOrderSync(models.Model):
                 order_data,
             )
             return sale_order
+        if sale_order and order_data["cancelled_at"]:
+            # Shopify zeroes cancelled quantities; retain Odoo lines for cancellation.
+            return sale_order
         if sale_order and self._is_delivered(sale_order):
             differences = line_diffs(
                 self._existing_line_snapshot(binding, sale_order),
@@ -444,6 +567,12 @@ class ShopifyOrderSync(models.Model):
         pricelist = self._pricelist(instance, currency)
         values = {
             "partner_id": partner.id,
+            "partner_shipping_id": self._order_address_partner(
+                partner, order_data.get("shipping_address"), "delivery"
+            ).id,
+            "partner_invoice_id": self._order_address_partner(
+                partner, order_data.get("billing_address"), "invoice"
+            ).id,
             "company_id": instance.company_id.id,
             "pricelist_id": pricelist.id,
             "currency_id": currency.id,
@@ -470,10 +599,52 @@ class ShopifyOrderSync(models.Model):
                 )
             write_values = values
             if sale_order.state not in ("draft", "sent"):
+                # Do not rely solely on contact IDs: two Shopify address
+                # versions can reuse the same partner if a material field
+                # (phone/province/company) was left out of matching.
+                billing_changed = sale_order.partner_invoice_id.id != values[
+                    "partner_invoice_id"
+                ] or (
+                    order_data.get("billing_address")
+                    and not self._is_same_order_address(
+                        sale_order.partner_invoice_id,
+                        self._order_address_values(
+                            partner, order_data["billing_address"], "invoice"
+                        ),
+                    )
+                )
+                shipping_changed = sale_order.partner_shipping_id.id != values[
+                    "partner_shipping_id"
+                ] or (
+                    order_data.get("shipping_address")
+                    and not self._is_same_order_address(
+                        sale_order.partner_shipping_id,
+                        self._order_address_values(
+                            partner, order_data["shipping_address"], "delivery"
+                        ),
+                    )
+                )
+                if billing_changed:
+                    raise ShopifyOrderImportError(
+                        self.env._(
+                            "Shopify billing address differs from the confirmed "
+                            "Odoo order %s; review its invoice address manually.",
+                            sale_order.name,
+                        )
+                    )
+                if shipping_changed:
+                    raise ShopifyOrderImportError(
+                        self.env._(
+                            "Shopify shipping address differs from the confirmed "
+                            "Odoo order %s; review its open deliveries manually.",
+                            sale_order.name,
+                        )
+                    )
                 # Odoo 19 rejects these commercial fields on confirmed
                 # orders even when their values have not changed.
                 immutable_fields = {
                     "partner_id",
+                    "partner_invoice_id",
                     "company_id",
                     "pricelist_id",
                     "currency_id",
@@ -499,6 +670,81 @@ class ShopifyOrderSync(models.Model):
         self._apply_lines(binding, sale_order, instance, order_data)
         self._verify_total(sale_order, currency, instance, order_data)
         return sale_order
+
+    def _order_address_partner(self, partner, address, address_type):
+        if not address or not any(
+            address.get(key) for key in ("address1", "city", "zip")
+        ):
+            return partner
+        values = self._order_address_values(partner, address, address_type)
+        for candidate in partner | partner.child_ids:
+            if self._is_same_order_address(candidate, values):
+                return candidate
+        return (
+            self.env["res.partner"]
+            .with_context(shopify_customer_import=True)
+            .create(values)
+        )
+
+    def _order_address_values(self, partner, address, address_type):
+        country = self.env["res.country"]
+        if address.get("country"):
+            country = country.search([("code", "=", address["country"])], limit=1)
+        state = self.env["res.country.state"]
+        if country and address.get("province"):
+            state = state.search(
+                [
+                    ("country_id", "=", country.id),
+                    "|",
+                    ("code", "=ilike", address["province"]),
+                    ("name", "=ilike", address["province"]),
+                ],
+                limit=1,
+            )
+        name = " ".join(
+            part
+            for part in (address.get("first_name"), address.get("last_name"))
+            if part
+        )
+        company = (address.get("company") or "").strip()
+        # Odoo 19 explicitly clears res.partner.company_name when parent_id
+        # is present. Keep Shopify's company in the child contact's name,
+        # where it is retained and appears on delivery/invoice addresses.
+        if company and name:
+            name = f"{company} / {name}"
+        return {
+            "parent_id": partner.id,
+            "company_id": partner.company_id.id,
+            "type": address_type,
+            "name": name or company or partner.name,
+            "street": address.get("address1") or False,
+            "street2": address.get("address2") or False,
+            "city": address.get("city") or False,
+            "state_id": state.id or False,
+            "country_id": country.id or False,
+            "zip": address.get("zip") or False,
+            "phone": address.get("phone") or False,
+        }
+
+    def _is_same_order_address(self, partner, values):
+        def normalized(value):
+            return (value or "").strip().casefold()
+
+        return (
+            all(
+                normalized(partner[field]) == normalized(values[field])
+                for field in (
+                    "name",
+                    "street",
+                    "street2",
+                    "city",
+                    "zip",
+                    "phone",
+                )
+            )
+            and partner.country_id.id == (values["country_id"] or False)
+            and partner.state_id.id == (values["state_id"] or False)
+        )
 
     def _shopify_order_extra_values(self, instance, order_data):
         """Allow optional modules to supply sale-order routing values."""
@@ -1175,7 +1421,15 @@ class ShopifyOrderSync(models.Model):
                     self.env._("Shopify cancelled an order already delivered in Odoo.")
                 )
             if sale_order.state != "cancel":
-                sale_order.action_cancel()
+                sale_order.with_context(disable_cancel_warning=True).action_cancel()
+                if sale_order.state != "cancel":
+                    raise ShopifyOrderImportError(
+                        self.env._(
+                            "Shopify cancelled the order, but Odoo could not cancel "
+                            "sale order %s.",
+                            sale_order.name,
+                        )
+                    )
             return
         if self._should_confirm_shopify_order(instance, order_data, sale_order):
             sale_order.action_confirm()
@@ -1195,6 +1449,12 @@ class ShopifyOrderSync(models.Model):
                     ),
                 )
 
+    def _is_after_confirmation_cutoff(self, instance, order_data):
+        """Protect all automatic confirmation paths, not only payment status."""
+        cutoff = instance.auto_confirm_order_date_from
+        created_at = _utc_datetime(order_data["created_at"])
+        return not cutoff or bool(created_at and created_at >= cutoff)
+
     def _should_confirm_shopify_order(self, instance, order_data, sale_order):
         eligible = (
             order_data["financial_status"] == "PAID" and instance.auto_confirm_paid
@@ -1202,10 +1462,7 @@ class ShopifyOrderSync(models.Model):
             order_data["financial_status"] == "PARTIALLY_PAID"
             and instance.auto_confirm_partially_paid
         )
-        created_at = _utc_datetime(order_data["created_at"])
-        after_cutover = not instance.auto_confirm_order_date_from or (
-            created_at and created_at >= instance.auto_confirm_order_date_from
-        )
+        after_cutover = self._is_after_confirmation_cutoff(instance, order_data)
         return (
             not order_data["is_draft"]
             and instance.order_confirmation_policy == "auto"
@@ -1232,6 +1489,8 @@ class ShopifyOrderSync(models.Model):
         if not should_invoice or sale_order.state == "cancel":
             return
         if sale_order.state in ("draft", "sent"):
+            if not self._is_after_confirmation_cutoff(instance, order_data):
+                return
             sale_order.action_confirm()
             if sale_order.shopify_risk_hold:
                 sale_order.picking_ids.write({"shopify_risk_hold": True})

@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 MONEY_FIELDS = """
     shopMoney { amount currencyCode }
     presentmentMoney { amount currencyCode }
+"""
+
+ADDRESS_FIELDS = """
+    firstName
+    lastName
+    company
+    address1
+    address2
+    city
+    provinceCode
+    countryCodeV2
+    zip
+    phone
 """
 
 ORDER_FIELDS = f"""
@@ -30,8 +43,8 @@ ORDER_FIELDS = f"""
     currencyCode
     presentmentCurrencyCode
     customer {{ id }}
-    shippingAddress {{ countryCodeV2 }}
-    billingAddress {{ countryCodeV2 }}
+    shippingAddress {{ {ADDRESS_FIELDS} }}
+    billingAddress {{ {ADDRESS_FIELDS} }}
     discountCodes
     currentSubtotalPriceSet {{ {MONEY_FIELDS} }}
     currentTotalDiscountsSet {{ {MONEY_FIELDS} }}
@@ -210,6 +223,20 @@ def orders_bulk_query(
     return "{ " + root + " { edges { node { id name updatedAt } } } }"
 
 
+def orders_updated_search(since: datetime) -> str:
+    """Build a UTC search filter for orders updated after the given timestamp."""
+    if since.tzinfo:
+        since = since.astimezone(timezone.utc).replace(tzinfo=None)
+    return f"updated_at:>='{since.replace(microsecond=0).isoformat()}Z'"
+
+
+ORDERS_UPDATED_QUERY = (
+    "query ShopifyUpdatedOrders($after: String, $query: String) {"
+    " orders(first: 250, after: $after, query: $query, sortKey: UPDATED_AT) {"
+    " nodes { id name updatedAt } pageInfo { hasNextPage endCursor } } }"
+)
+
+
 DRAFT_ORDER_FIELDS = f"""
     id
     name
@@ -223,8 +250,8 @@ DRAFT_ORDER_FIELDS = f"""
     currencyCode
     presentmentCurrencyCode
     customer {{ id }}
-    shippingAddress {{ countryCodeV2 }}
-    billingAddress {{ countryCodeV2 }}
+    shippingAddress {{ {ADDRESS_FIELDS} }}
+    billingAddress {{ {ADDRESS_FIELDS} }}
     order {{ id }}
     discountCodes
     subtotalPriceSet {{ {MONEY_FIELDS} }}
@@ -279,7 +306,9 @@ __all__ = [
     "DRAFT_ORDER_BY_ID_QUERY",
     "DRAFT_ORDERS_QUERY",
     "ORDER_BY_ID_QUERY",
+    "ORDERS_UPDATED_QUERY",
     "REFUND_BY_ID_QUERY",
     "RETURN_BY_ID_QUERY",
     "orders_bulk_query",
+    "orders_updated_search",
 ]

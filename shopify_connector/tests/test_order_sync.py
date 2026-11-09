@@ -1,8 +1,13 @@
-from unittest.mock import patch
+from datetime import datetime
+from unittest.mock import Mock, patch
+
+from freezegun import freeze_time
 
 from odoo import SUPERUSER_ID
 
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
+from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.lib.client import ShopifyError
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -402,3 +407,490 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(refund), 1)
         self.assertEqual(refund.move_id.move_type, "out_refund")
         self.assertEqual(refund.move_id.state, "posted")
+
+    def test_updated_order_drift_pages_and_advances_cursor(self):
+        self.instance.write({"order_drift_since": datetime(2026, 10, 1, 8)})
+        client = Mock()
+        client.execute.side_effect = [
+            {
+                "orders": {
+                    "nodes": [
+                        {
+                            "id": "gid://shopify/Order/101",
+                            "name": "#101",
+                            "updatedAt": "2026-10-10T10:00:00Z",
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "next"},
+                }
+            },
+            {
+                "orders": {
+                    "nodes": [
+                        {
+                            "id": "gid://shopify/Order/102",
+                            "name": "#102",
+                            "updatedAt": "2026-10-10T10:00:00Z",
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                }
+            },
+        ]
+        with (
+            freeze_time("2026-11-02 09:00:00"),
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            count = self.instance._job_sync_updated_orders()
+        self.assertEqual(count, 2)
+        search = "updated_at:>='2026-10-01T07:00:00Z'"
+        self.assertEqual(
+            [call.args[1] for call in client.execute.call_args_list],
+            [{"after": None, "query": search}, {"after": "next", "query": search}],
+        )
+        trap.assert_jobs_count(2, only=self.order_model._job_import_order_from_api)
+        self.assertEqual(self.instance.order_drift_since, datetime(2026, 11, 2, 9))
+
+    def test_updated_order_drift_skips_current_bindings(self):
+        self.order_model.create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Order/101",
+                "order_name": "#101",
+                "external_updated_at": datetime(2026, 11, 1, 10),
+                "state": "synced",
+            }
+        )
+        client = Mock()
+        client.execute.return_value = {
+            "orders": {
+                "nodes": [
+                    {
+                        "id": "gid://shopify/Order/101",
+                        "name": "#101",
+                        "updatedAt": "2026-10-10T10:00:00Z",
+                    },
+                    {
+                        "id": "gid://shopify/Order/102",
+                        "name": "#102",
+                        "updatedAt": "2026-11-02T10:00:00Z",
+                    },
+                ],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
+        with (
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            count = self.instance._job_sync_updated_orders()
+        self.assertEqual(count, 1)
+        trap.assert_enqueued_job(
+            self.order_model._job_import_order_from_api,
+            args=(self.instance.id, "gid://shopify/Order/102"),
+        )
+
+    def test_updated_order_drift_does_not_advance_on_api_error(self):
+        original = datetime(2026, 10, 1, 8)
+        self.instance.write({"order_drift_since": original})
+        client = Mock()
+        client.execute.side_effect = ShopifyError("Shopify unavailable")
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            self.assertRaises(ShopifyError),
+        ):
+            self.instance._job_sync_updated_orders()
+        self.assertEqual(self.instance.order_drift_since, original)
+
+    def test_order_import_uses_distinct_shipping_and_invoice_addresses(self):
+        shipping = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping 1",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        billing = {**shipping, "address1": "Billing 2"}
+        payload = self._payload(
+            order_id=109, shippingAddress=shipping, billingAddress=billing
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        order = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(order.partner_shipping_id.street, "Shipping 1")
+        self.assertEqual(order.partner_invoice_id.street, "Billing 2")
+        self.assertNotEqual(order.partner_shipping_id, order.partner_invoice_id)
+
+    def test_reimported_order_does_not_duplicate_address_contacts(self):
+        address = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping 1",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        payload = self._payload(
+            order_id=110, shippingAddress=address, billingAddress=address
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        order = self.order_model.browse(binding_id).odoo_id
+        before = order.partner_id.child_ids
+        payload["updatedAt"] = "2026-01-11T10:00:00Z"
+        self.order_model._job_import_order(self.instance.id, payload)
+        self.assertEqual(order.partner_id.child_ids, before)
+        self.assertEqual(order.partner_shipping_id, order.partner_invoice_id)
+
+    def test_cancelled_confirmed_order_keeps_lines(self):
+        self.instance.order_confirmation_policy = "auto"
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(order_id=111, displayFinancialStatus="PAID"),
+        )
+        order = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(order.state, "sale")
+        payload = self._payload(
+            order_id=111,
+            quantity=0,
+            total="0.00",
+            cancelledAt="2026-01-12T10:00:00Z",
+            updatedAt="2026-01-12T10:00:00Z",
+        )
+        self.assertTrue(self.order_model._job_import_order(self.instance.id, payload))
+        self.assertEqual(order.state, "cancel")
+        self.assertEqual(order.order_line.product_uom_qty, 1)
+
+    def test_drift_pending_survives_failed_and_never_executed_child_jobs(self):
+        gid = "gid://shopify/Order/501"
+        stamp = "2026-10-25T10:00:00Z"
+        self.instance.order_drift_since = datetime(2026, 10, 1, 8)
+        client = Mock()
+        client.execute.return_value = {
+            "orders": {
+                "nodes": [{"id": gid, "name": "#501", "updatedAt": stamp}],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
+        with (
+            freeze_time("2026-11-02 09:00:00"),
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 1)
+        trap.assert_enqueued_job(
+            self.order_model._job_import_order_from_api,
+            args=(self.instance.id, gid),
+        )
+        self.assertIn(gid, self.instance.order_drift_pending)
+
+        # The child returns False after persisting an error binding. Its
+        # update is older than the next daily scan's one-hour overlap.
+        bad = self._payload(order_id=501, total="10.02", updatedAt=stamp)
+        self.assertFalse(self.order_model._job_import_order(self.instance.id, bad))
+        binding = self.order_model.search(
+            [("instance_id", "=", self.instance.id), ("shopify_id", "=", gid)]
+        )
+        self.assertEqual(binding.state, "error")
+        client.execute.return_value = {
+            "orders": {"nodes": [], "pageInfo": {"hasNextPage": False}}
+        }
+        with (
+            freeze_time("2026-11-05 09:00:00"),
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 1)
+        trap.assert_enqueued_job(
+            self.order_model._job_import_order_from_api,
+            args=(self.instance.id, gid),
+        )
+        self.assertIn(gid, self.instance.order_drift_pending)
+
+        # A repaired import acknowledges the version on the following scan.
+        corrected = self._payload(order_id=501, updatedAt=stamp)
+        self.assertTrue(self.order_model._job_import_order(self.instance.id, corrected))
+        self.assertEqual(binding.state, "synced")
+        with (
+            freeze_time("2026-11-06 09:00:00"),
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 0)
+        self.assertFalse(self.instance.order_drift_pending)
+        trap.assert_jobs_count(0)
+
+    def test_paid_historical_order_is_not_confirmed_by_auto_invoicing(self):
+        self.instance.write(
+            {
+                "order_confirmation_policy": "auto",
+                "order_invoicing_policy": "paid",
+                "auto_confirm_order_date_from": datetime(2026, 2, 1),
+            }
+        )
+        payload = self._payload(
+            order_id=502,
+            displayFinancialStatus="PAID",
+            updatedAt="2026-11-05T10:00:00Z",
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        sale = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(sale.state, "draft")
+        self.assertFalse(sale.invoice_ids)
+        self.assertFalse(sale.picking_ids)
+
+    def test_paid_recent_order_still_auto_invoices_after_cutoff(self):
+        self.instance.write(
+            {
+                "order_confirmation_policy": "auto",
+                "order_invoicing_policy": "paid",
+                "auto_confirm_order_date_from": datetime(2026, 2, 1),
+            }
+        )
+        payload = self._payload(
+            order_id=503,
+            createdAt="2026-02-02T10:00:00Z",
+            updatedAt="2026-11-05T10:00:00Z",
+            displayFinancialStatus="PAID",
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        sale = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(sale.state, "sale")
+        self.assertTrue(sale.invoice_ids)
+        self.assertTrue(all(i.state == "posted" for i in sale.invoice_ids))
+
+    def test_confirmed_order_billing_address_drift_is_actionable(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Billing A",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=504,
+                billingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        old_partner = sale.partner_invoice_id
+        self.assertEqual(sale.state, "sale")
+        changed = {**original, "address1": "Billing B"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=504,
+                billingAddress=changed,
+                updatedAt="2026-11-05T10:00:00Z",
+                displayFinancialStatus="PAID",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("billing address differs", binding.error_message)
+        self.assertEqual(sale.partner_invoice_id, old_partner)
+
+    def test_confirmed_order_shipping_address_drift_is_actionable(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping A",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=505,
+                shippingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        old_partner = sale.partner_shipping_id
+        self.assertEqual(sale.state, "sale")
+        changed = {**original, "address1": "Shipping B"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=505,
+                shippingAddress=changed,
+                updatedAt="2026-11-05T10:00:00Z",
+                displayFinancialStatus="PAID",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("shipping address differs", binding.error_message)
+        self.assertEqual(sale.partner_shipping_id, old_partner)
+
+    def test_confirmed_shipping_province_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "provinceCode": "NY",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=506,
+                shippingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_digest = binding.payload_digest
+        old_partner = sale.partner_shipping_id
+        old_state = old_partner.state_id
+        self.assertTrue(old_state)
+        changed = {**original, "provinceCode": "NJ"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=506,
+                shippingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("shipping address differs", binding.error_message)
+        self.assertEqual(binding.payload_digest, old_digest)
+        self.assertEqual(sale.partner_shipping_id, old_partner)
+        self.assertEqual(old_partner.state_id, old_state)
+
+    def test_confirmed_billing_phone_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "provinceCode": "NY",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                billingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_digest = binding.payload_digest
+        old_partner = sale.partner_invoice_id
+        changed = {**original, "phone": "+1-555-2222"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                billingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("billing address differs", binding.error_message)
+        self.assertEqual(binding.payload_digest, old_digest)
+        self.assertEqual(sale.partner_invoice_id, old_partner)
+        self.assertEqual(old_partner.phone, original["phone"])
+
+    def test_confirmed_billing_company_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "company": "Company A",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=508,
+                billingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_partner = sale.partner_invoice_id
+        self.assertEqual(old_partner.name, "Company A / Ada Lovelace")
+        changed = {**original, "company": "Company B"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=508,
+                billingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertEqual(sale.partner_invoice_id, old_partner)
+        self.assertEqual(old_partner.name, "Company A / Ada Lovelace")
+
+    def test_draft_shipping_phone_change_reuses_full_address_only(self):
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(order_id=509, shippingAddress=original),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        first_contact = sale.partner_shipping_id
+        updated = {**original, "phone": "+1-555-2222"}
+        changed_payload = self._payload(
+            order_id=509,
+            shippingAddress=updated,
+            updatedAt="2026-11-05T10:00:00Z",
+        )
+        self.assertTrue(
+            self.order_model._job_import_order(self.instance.id, changed_payload)
+        )
+        replacement = sale.partner_shipping_id
+        self.assertNotEqual(replacement, first_contact)
+        self.assertEqual(replacement.phone, updated["phone"])
+        self.assertEqual(first_contact.phone, original["phone"])
+        child_count = len(sale.partner_id.child_ids)
+        self.assertTrue(
+            self.order_model._job_import_order(self.instance.id, changed_payload)
+        )
+        self.assertEqual(len(sale.partner_id.child_ids), child_count)
+        self.assertEqual(sale.partner_shipping_id, replacement)

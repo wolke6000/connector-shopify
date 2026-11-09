@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 
+from .customer import normalize_customer_address
+
 
 class ShopifyOrderPayloadError(ValueError):
     """Raised when an order cannot be represented without guessing."""
@@ -462,6 +464,18 @@ def _risk_level(payload: dict[str, Any]) -> str:
     return max(values or ["UNKNOWN"], key=lambda value: priority.get(value, 0))
 
 
+def _order_address(payload: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+    """Normalize a GraphQL or REST order shipping/billing address."""
+    for key in keys:
+        address = payload.get(key)
+        if isinstance(address, dict) and address:
+            normalized = normalize_customer_address(address)
+            normalized.pop("id")
+            normalized.pop("is_default")
+            return normalized
+    return None
+
+
 def normalize_order_payload(
     payload: dict[str, Any], *, is_draft: bool = False
 ) -> dict[str, Any]:
@@ -569,6 +583,10 @@ def normalize_order_payload(
             or (payload.get("billing_address") or {}).get("country_code")
             or ""
         ).upper(),
+        "shipping_address": _order_address(
+            payload, "shippingAddress", "shipping_address"
+        ),
+        "billing_address": _order_address(payload, "billingAddress", "billing_address"),
         "email": str(payload.get("email") or payload.get("contactEmail") or ""),
         "note": str(payload.get("note2") or payload.get("note") or ""),
         "tags": [

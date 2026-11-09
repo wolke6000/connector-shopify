@@ -8,6 +8,8 @@ from odoo import fields, models
 from odoo.exceptions import UserError
 from odoo.fields import Command
 
+from odoo.addons.queue_job.exception import RetryableJobError
+
 from ..graphql.fulfillment import (
     FULFILLMENT_BY_ID_QUERY,
     FULFILLMENT_CANCEL_MUTATION,
@@ -365,7 +367,9 @@ class ShopifyOrderFulfillmentSync(models.Model):
     def _job_push_picking_fulfillment(self, picking_id):  # noqa: C901
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active:
+        if not (
+            self.instance_id.active and self.instance_id.fulfillment_export_enabled
+        ):
             return False
         picking = self.env["stock.picking"].browse(picking_id).exists()
         if (
@@ -796,6 +800,17 @@ class ShopifyExternalFulfillmentImport(models.Model):
         instance = self.env["shopify.instance"].browse(instance_id).exists()
         if not instance or not instance.active:
             return False
+        self.env.cr.execute(
+            "SELECT pg_try_advisory_xact_lock(%s, hashtext(%s))",
+            (instance.id, fulfillment_id),
+        )
+        if not self.env.cr.fetchone()[0]:
+            raise RetryableJobError(
+                self.env._(
+                    "Another job is importing Shopify fulfillment %s.", fulfillment_id
+                ),
+                seconds=5,
+            )
         webhook_payload = webhook_payload or {}
         try:
             data = instance._shopify_client().execute(
@@ -926,6 +941,11 @@ class ShopifyExternalFulfillmentImport(models.Model):
     def _auto_validate_external(self, payload, webhook_payload):
         self.ensure_one()
         if self.fulfillment_status != "SUCCESS":
+            return False
+        # A later fulfillments/update or polling retry must never ship the
+        # backorder belonging to the same already-processed fulfillment ID.
+        # Tracking metadata is refreshed on the binding during import.
+        if self.picking_id:
             return False
         quantities = defaultdict(int)
         for line in _nodes(payload.get("fulfillmentLineItems")):
