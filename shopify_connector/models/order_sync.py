@@ -599,10 +599,34 @@ class ShopifyOrderSync(models.Model):
                 )
             write_values = values
             if sale_order.state not in ("draft", "sent"):
-                # A confirmed sale's invoice/delivery documents may already
-                # exist. Never mark a changed address as synchronized while
-                # Odoo invoices or pickings still point to the old contact.
-                if sale_order.partner_invoice_id.id != values["partner_invoice_id"]:
+                # Do not rely solely on contact IDs: two Shopify address
+                # versions can reuse the same partner if a material field
+                # (phone/province/company) was left out of matching.
+                billing_changed = (
+                    sale_order.partner_invoice_id.id != values["partner_invoice_id"]
+                    or (
+                        order_data.get("billing_address")
+                        and not self._is_same_order_address(
+                            sale_order.partner_invoice_id,
+                            self._order_address_values(
+                                partner, order_data["billing_address"], "invoice"
+                            ),
+                        )
+                    )
+                )
+                shipping_changed = (
+                    sale_order.partner_shipping_id.id != values["partner_shipping_id"]
+                    or (
+                        order_data.get("shipping_address")
+                        and not self._is_same_order_address(
+                            sale_order.partner_shipping_id,
+                            self._order_address_values(
+                                partner, order_data["shipping_address"], "delivery"
+                            ),
+                        )
+                    )
+                )
+                if billing_changed:
                     raise ShopifyOrderImportError(
                         self.env._(
                             "Shopify billing address differs from the confirmed "
@@ -610,7 +634,7 @@ class ShopifyOrderSync(models.Model):
                             sale_order.name,
                         )
                     )
-                if sale_order.partner_shipping_id.id != values["partner_shipping_id"]:
+                if shipping_changed:
                     raise ShopifyOrderImportError(
                         self.env._(
                             "Shopify shipping address differs from the confirmed "
@@ -689,6 +713,9 @@ class ShopifyOrderSync(models.Model):
             "company_id": partner.company_id.id,
             "type": address_type,
             "name": name or address.get("company") or partner.name,
+            # Shopify's company is material even when the recipient has a name.
+            # Keep it separate rather than silently discarding it.
+            "company_name": address.get("company") or False,
             "street": address.get("address1") or False,
             "street2": address.get("address2") or False,
             "city": address.get("city") or False,
@@ -702,10 +729,22 @@ class ShopifyOrderSync(models.Model):
         def normalized(value):
             return (value or "").strip().casefold()
 
-        return all(
-            normalized(partner[field]) == normalized(values[field])
-            for field in ("name", "street", "street2", "city", "zip")
-        ) and partner.country_id.id == (values["country_id"] or False)
+        return (
+            all(
+                normalized(partner[field]) == normalized(values[field])
+                for field in (
+                    "name",
+                    "company_name",
+                    "street",
+                    "street2",
+                    "city",
+                    "zip",
+                    "phone",
+                )
+            )
+            and partner.country_id.id == (values["country_id"] or False)
+            and partner.state_id.id == (values["state_id"] or False)
+        )
 
     def _shopify_order_extra_values(self, instance, order_data):
         """Allow optional modules to supply sale-order routing values."""
