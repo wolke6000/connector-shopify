@@ -409,11 +409,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(refund.move_id.state, "posted")
 
     def test_updated_order_drift_pages_and_advances_cursor(self):
-        self.instance.write(
-            {
-                "order_drift_since": datetime(2026, 10, 1, 8),
-            }
-        )
+        self.instance.write({"order_drift_since": datetime(2026, 10, 1, 8)})
         client = Mock()
         client.execute.side_effect = [
             {
