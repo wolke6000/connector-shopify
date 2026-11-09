@@ -170,6 +170,17 @@ class ShopifyInstanceOrderSync(models.Model):
                     self.env._("Shopify returned an invalid order page cursor.")
                 )
 
+    def _queue_order_imports(self, orders):
+        """Enqueue updated-order imports with the same deduplication key as bulk."""
+        for order in orders:
+            self.env["shopify.order"].with_delay(
+                description=self.env._(
+                    "Import Shopify order %s", order.get("name") or order["id"]
+                ),
+                identity_key=f"shopify.order.import.{self.id}.{order['id']}",
+            )._job_import_order_from_api(self.id, order["id"])
+        return len(orders)
+
     def _job_fetch_orders_bulk(self, date_from=False, date_to=False):
         self = self.sudo()
         self.ensure_one()
