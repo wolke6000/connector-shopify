@@ -732,3 +732,165 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(binding.state, "error")
         self.assertIn("shipping address differs", binding.error_message)
         self.assertEqual(sale.partner_shipping_id, old_partner)
+
+    def test_confirmed_shipping_province_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "provinceCode": "NY",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=506,
+                shippingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_digest = binding.payload_digest
+        old_partner = sale.partner_shipping_id
+        old_state = old_partner.state_id
+        self.assertTrue(old_state)
+        changed = {**original, "provinceCode": "NJ"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=506,
+                shippingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("shipping address differs", binding.error_message)
+        self.assertEqual(binding.payload_digest, old_digest)
+        self.assertEqual(sale.partner_shipping_id, old_partner)
+        self.assertEqual(old_partner.state_id, old_state)
+
+    def test_confirmed_billing_phone_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "provinceCode": "NY",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                billingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_digest = binding.payload_digest
+        old_partner = sale.partner_invoice_id
+        changed = {**original, "phone": "+1-555-2222"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                billingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("billing address differs", binding.error_message)
+        self.assertEqual(binding.payload_digest, old_digest)
+        self.assertEqual(sale.partner_invoice_id, old_partner)
+        self.assertEqual(old_partner.phone, original["phone"])
+
+    def test_confirmed_billing_company_only_change_is_not_silently_synced(self):
+        self.instance.order_confirmation_policy = "auto"
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "company": "Company A",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=508,
+                billingAddress=original,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        self.assertEqual(sale.state, "sale")
+        old_partner = sale.partner_invoice_id
+        self.assertEqual(old_partner.company_name, "Company A")
+        changed = {**original, "company": "Company B"}
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=508,
+                billingAddress=changed,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-11-05T10:00:00Z",
+            ),
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertEqual(sale.partner_invoice_id, old_partner)
+        self.assertEqual(old_partner.company_name, "Company A")
+
+    def test_draft_shipping_phone_change_reuses_full_address_only(self):
+        original = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "123 Main St",
+            "city": "Albany",
+            "zip": "12207",
+            "countryCodeV2": "US",
+            "phone": "+1-555-1111",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(order_id=509, shippingAddress=original),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        first_contact = sale.partner_shipping_id
+        updated = {**original, "phone": "+1-555-2222"}
+        changed_payload = self._payload(
+            order_id=509,
+            shippingAddress=updated,
+            updatedAt="2026-11-05T10:00:00Z",
+        )
+        self.assertTrue(
+            self.order_model._job_import_order(self.instance.id, changed_payload)
+        )
+        replacement = sale.partner_shipping_id
+        self.assertNotEqual(replacement, first_contact)
+        self.assertEqual(replacement.phone, updated["phone"])
+        self.assertEqual(first_contact.phone, original["phone"])
+        child_count = len(sale.partner_id.child_ids)
+        self.assertTrue(
+            self.order_model._job_import_order(self.instance.id, changed_payload)
+        )
+        self.assertEqual(len(sale.partner_id.child_ids), child_count)
+        self.assertEqual(sale.partner_shipping_id, replacement)
