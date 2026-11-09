@@ -260,11 +260,85 @@ class TestShopifyFulfillmentSync(TransactionCase):
         auto_validate.assert_not_called()
 
     def test_queued_fulfillment_job_obeys_disabled_export_switch(self):
-        # The job may have been enqueued before the export switch was disabled.
+        # Use a real completed picking: the old test passed a sale.order ID,
+        # which could short-circuit the job even without its export guard.
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.instance.fulfillment_export_enabled = False
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+        picking.button_validate()
+        self.assertEqual(picking.state, "done")
+
+        # A valid job with export enabled must reach the outbound boundary.
+        self.instance.fulfillment_export_enabled = True
+        with patch.object(
+            type(self.order_binding),
+            "_job_refresh_fulfillment_orders",
+            side_effect=RuntimeError("outbound boundary reached"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "outbound boundary"):
+                self.order_binding._job_push_picking_fulfillment(picking.id)
+
         self.instance.fulfillment_export_enabled = False
         with patch.object(
             type(self.order_binding), "_job_refresh_fulfillment_orders"
         ) as refresh:
-            result = self.order_binding._job_push_picking_fulfillment(self.sale.id)
+            result = self.order_binding._job_push_picking_fulfillment(picking.id)
         self.assertFalse(result)
         refresh.assert_not_called()
+
+    def test_replayed_external_fulfillment_never_revalidates_a_picking(self):
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.instance.fulfillment_export_enabled = False
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+        picking.button_validate()
+        self.assertEqual(picking.state, "done")
+        self.instance.fulfillment_auto_validate_webhook = True
+
+        fulfillment = self.env["shopify.fulfillment"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Fulfillment/987",
+                "order_binding_id": self.order_binding.id,
+                "origin": "shopify",
+                "state": "synced",
+                "fulfillment_status": "SUCCESS",
+                "picking_id": picking.id,
+            }
+        )
+        client = MagicMock()
+        client.execute.return_value = {
+            "fulfillment": {
+                "id": fulfillment.shopify_id,
+                "status": "SUCCESS",
+                "order": {"id": self.order_binding.shopify_id},
+                "trackingInfo": {"number": "TRACK-UPDATED"},
+                "fulfillmentLineItems": {"nodes": [
+                    {"lineItem": {"id": self.line_binding.shopify_id}, "quantity": 1}
+                ]},
+            }
+        }
+        with (
+            patch.object(
+                type(self.instance), "_shopify_client", return_value=client
+            ),
+            patch.object(type(picking), "button_validate") as validate,
+            patch.object(type(picking), "_action_done") as action_done,
+        ):
+            result = self.env["shopify.fulfillment"]._job_import_from_shopify(
+                self.instance.id, fulfillment.shopify_id
+            )
+        self.assertEqual(result, fulfillment.id)
+        self.assertEqual(fulfillment.picking_id, picking)
+        self.assertEqual(fulfillment.tracking_number, "TRACK-UPDATED")
+        validate.assert_not_called()
+        action_done.assert_not_called()
