@@ -942,6 +942,11 @@ class ShopifyExternalFulfillmentImport(models.Model):
         self.ensure_one()
         if self.fulfillment_status != "SUCCESS":
             return False
+        # A later fulfillments/update or polling retry must never ship the
+        # backorder belonging to the same already-processed fulfillment ID.
+        # Tracking metadata is refreshed on the binding during import.
+        if self.picking_id:
+            return False
         quantities = defaultdict(int)
         for line in _nodes(payload.get("fulfillmentLineItems")):
             line_id = str((line.get("lineItem") or {}).get("id") or "")
