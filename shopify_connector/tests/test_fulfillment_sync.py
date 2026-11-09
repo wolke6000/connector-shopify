@@ -258,3 +258,13 @@ class TestShopifyFulfillmentSync(TransactionCase):
         self.assertEqual(result, fulfillment.id)
         self.assertEqual(fulfillment.fulfillment_status, "SUCCESS")
         auto_validate.assert_not_called()
+
+    def test_queued_fulfillment_job_obeys_disabled_export_switch(self):
+        # The job may have been enqueued before the export switch was disabled.
+        self.instance.fulfillment_export_enabled = False
+        with patch.object(
+            type(self.order_binding), "_job_refresh_fulfillment_orders"
+        ) as refresh:
+            result = self.order_binding._job_push_picking_fulfillment(self.sale.id)
+        self.assertFalse(result)
+        refresh.assert_not_called()
