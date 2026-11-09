@@ -586,9 +586,7 @@ def normalize_order_payload(
         "shipping_address": _order_address(
             payload, "shippingAddress", "shipping_address"
         ),
-        "billing_address": _order_address(
-            payload, "billingAddress", "billing_address"
-        ),
+        "billing_address": _order_address(payload, "billingAddress", "billing_address"),
         "email": str(payload.get("email") or payload.get("contactEmail") or ""),
         "note": str(payload.get("note2") or payload.get("note") or ""),
         "tags": [
