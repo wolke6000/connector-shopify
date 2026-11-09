@@ -842,7 +842,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         sale = binding.odoo_id
         self.assertEqual(sale.state, "sale")
         old_partner = sale.partner_invoice_id
-        self.assertEqual(old_partner.company_name, "Company A")
+        self.assertEqual(old_partner.name, "Company A / Ada Lovelace")
         changed = {**original, "company": "Company B"}
         result = self.order_model._job_import_order(
             self.instance.id,
@@ -856,7 +856,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertFalse(result)
         self.assertEqual(binding.state, "error")
         self.assertEqual(sale.partner_invoice_id, old_partner)
-        self.assertEqual(old_partner.company_name, "Company A")
+        self.assertEqual(old_partner.name, "Company A / Ada Lovelace")
 
     def test_draft_shipping_phone_change_reuses_full_address_only(self):
         original = {
