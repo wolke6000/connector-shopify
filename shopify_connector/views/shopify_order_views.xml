@@ -248,6 +248,7 @@
                         <group string="Historical Import">
                             <field name="order_import_date_from" />
                             <field name="order_import_date_to" />
+                            <field name="order_drift_since" />
                             <button
                                 name="action_import_orders"
                                 type="object"
