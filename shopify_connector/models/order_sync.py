@@ -30,7 +30,6 @@ from ..lib.order import (
 )
 from .webhook_event import WEBHOOK_HANDLERS
 
-
 ORDER_DRIFT_DEFAULT_WINDOW = timedelta(days=2)
 ORDER_DRIFT_OVERLAP = timedelta(hours=1)
 
@@ -106,11 +105,15 @@ class ShopifyInstanceOrderSync(models.Model):
             [("active", "=", True), ("state", "=", "connected")]
         ):
             instance.with_delay(
-                description=self.env._("Reconcile Shopify orders for %s", instance.name),
+                description=self.env._(
+                    "Reconcile Shopify orders for %s", instance.name
+                ),
                 identity_key=f"shopify.orders.reconcile.{instance.id}",
             )._job_sync_updated_orders()
             instance._write_log(
-                entity="drift_orders", direction="import", level="info",
+                entity="drift_orders",
+                direction="import",
+                level="info",
                 message=self.env._("Updated Shopify orders reconciliation queued."),
                 record=instance,
             )
@@ -121,7 +124,9 @@ class ShopifyInstanceOrderSync(models.Model):
         if not self.active:
             return 0
         started = fields.Datetime.now()
-        since = (self.order_drift_since or started - ORDER_DRIFT_DEFAULT_WINDOW) - ORDER_DRIFT_OVERLAP
+        since = (
+            self.order_drift_since or started - ORDER_DRIFT_DEFAULT_WINDOW
+        ) - ORDER_DRIFT_OVERLAP
         orders = self._orders_not_imported_yet(self._fetch_updated_orders(since))
         count = self._queue_order_imports(orders)
         self.order_drift_since = started
@@ -130,14 +135,17 @@ class ShopifyInstanceOrderSync(models.Model):
     def _orders_not_imported_yet(self, orders):
         imported = {
             binding.shopify_id: binding.external_updated_at
-            for binding in self.env["shopify.order"].search([
-                ("instance_id", "=", self.id),
-                ("shopify_id", "in", [order["id"] for order in orders]),
-                ("state", "=", "synced"),
-            ])
+            for binding in self.env["shopify.order"].search(
+                [
+                    ("instance_id", "=", self.id),
+                    ("shopify_id", "in", [order["id"] for order in orders]),
+                    ("state", "=", "synced"),
+                ]
+            )
         }
         return [
-            order for order in orders
+            order
+            for order in orders
             if not imported.get(order["id"])
             or not order.get("updatedAt")
             or imported[order["id"]] < _utc_datetime(order["updatedAt"])
@@ -553,15 +561,19 @@ class ShopifyOrderSync(models.Model):
         return sale_order
 
     def _order_address_partner(self, partner, address, address_type):
-        if not address or not any(address.get(key) for key in ("address1", "city", "zip")):
+        if not address or not any(
+            address.get(key) for key in ("address1", "city", "zip")
+        ):
             return partner
         values = self._order_address_values(partner, address, address_type)
         for candidate in partner | partner.child_ids:
             if self._is_same_order_address(candidate, values):
                 return candidate
-        return self.env["res.partner"].with_context(
-            shopify_customer_import=True
-        ).create(values)
+        return (
+            self.env["res.partner"]
+            .with_context(shopify_customer_import=True)
+            .create(values)
+        )
 
     def _order_address_values(self, partner, address, address_type):
         country = self.env["res.country"]
@@ -569,28 +581,38 @@ class ShopifyOrderSync(models.Model):
             country = country.search([("code", "=", address["country"])], limit=1)
         state = self.env["res.country.state"]
         if country and address.get("province"):
-            state = state.search([
-                ("country_id", "=", country.id), "|",
-                ("code", "=ilike", address["province"]),
-                ("name", "=ilike", address["province"]),
-            ], limit=1)
+            state = state.search(
+                [
+                    ("country_id", "=", country.id),
+                    "|",
+                    ("code", "=ilike", address["province"]),
+                    ("name", "=ilike", address["province"]),
+                ],
+                limit=1,
+            )
         name = " ".join(
-            part for part in (address.get("first_name"), address.get("last_name"))
+            part
+            for part in (address.get("first_name"), address.get("last_name"))
             if part
         )
         return {
-            "parent_id": partner.id, "company_id": partner.company_id.id,
-            "type": address_type, "name": name or address.get("company") or partner.name,
+            "parent_id": partner.id,
+            "company_id": partner.company_id.id,
+            "type": address_type,
+            "name": name or address.get("company") or partner.name,
             "street": address.get("address1") or False,
             "street2": address.get("address2") or False,
             "city": address.get("city") or False,
-            "state_id": state.id or False, "country_id": country.id or False,
-            "zip": address.get("zip") or False, "phone": address.get("phone") or False,
+            "state_id": state.id or False,
+            "country_id": country.id or False,
+            "zip": address.get("zip") or False,
+            "phone": address.get("phone") or False,
         }
 
     def _is_same_order_address(self, partner, values):
         def normalized(value):
             return (value or "").strip().casefold()
+
         return all(
             normalized(partner[field]) == normalized(values[field])
             for field in ("name", "street", "street2", "city", "zip")
