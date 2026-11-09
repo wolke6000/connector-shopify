@@ -540,6 +540,28 @@ class ShopifyOrderSync(models.Model):
                 )
             write_values = values
             if sale_order.state not in ("draft", "sent"):
+                # A confirmed sale's invoice/delivery documents may already
+                # exist. Never mark a changed address as synchronized while
+                # Odoo invoices or pickings still point to the old contact.
+                if sale_order.partner_invoice_id.id != values["partner_invoice_id"]:
+                    raise ShopifyOrderImportError(
+                        self.env._(
+                            "Shopify billing address differs from the confirmed "
+                            "Odoo order %s; review its invoice address manually.",
+                            sale_order.name,
+                        )
+                    )
+                if (
+                    sale_order.partner_shipping_id.id
+                    != values["partner_shipping_id"]
+                ):
+                    raise ShopifyOrderImportError(
+                        self.env._(
+                            "Shopify shipping address differs from the confirmed "
+                            "Odoo order %s; review its open deliveries manually.",
+                            sale_order.name,
+                        )
+                    )
                 # Odoo 19 rejects these commercial fields on confirmed
                 # orders even when their values have not changed.
                 immutable_fields = {
@@ -1332,6 +1354,12 @@ class ShopifyOrderSync(models.Model):
                     ),
                 )
 
+    def _is_after_confirmation_cutoff(self, instance, order_data):
+        """Protect all automatic confirmation paths, not only payment status."""
+        cutoff = instance.auto_confirm_order_date_from
+        created_at = _utc_datetime(order_data["created_at"])
+        return not cutoff or bool(created_at and created_at >= cutoff)
+
     def _should_confirm_shopify_order(self, instance, order_data, sale_order):
         eligible = (
             order_data["financial_status"] == "PAID" and instance.auto_confirm_paid
@@ -1339,10 +1367,7 @@ class ShopifyOrderSync(models.Model):
             order_data["financial_status"] == "PARTIALLY_PAID"
             and instance.auto_confirm_partially_paid
         )
-        created_at = _utc_datetime(order_data["created_at"])
-        after_cutover = not instance.auto_confirm_order_date_from or (
-            created_at and created_at >= instance.auto_confirm_order_date_from
-        )
+        after_cutover = self._is_after_confirmation_cutoff(instance, order_data)
         return (
             not order_data["is_draft"]
             and instance.order_confirmation_policy == "auto"
@@ -1369,6 +1394,8 @@ class ShopifyOrderSync(models.Model):
         if not should_invoice or sale_order.state == "cancel":
             return
         if sale_order.state in ("draft", "sent"):
+            if not self._is_after_confirmation_cutoff(instance, order_data):
+                return
             sale_order.action_confirm()
             if sale_order.shopify_risk_hold:
                 sale_order.picking_ids.write({"shopify_risk_hold": True})
