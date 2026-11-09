@@ -602,28 +602,26 @@ class ShopifyOrderSync(models.Model):
                 # Do not rely solely on contact IDs: two Shopify address
                 # versions can reuse the same partner if a material field
                 # (phone/province/company) was left out of matching.
-                billing_changed = (
-                    sale_order.partner_invoice_id.id != values["partner_invoice_id"]
-                    or (
-                        order_data.get("billing_address")
-                        and not self._is_same_order_address(
-                            sale_order.partner_invoice_id,
-                            self._order_address_values(
-                                partner, order_data["billing_address"], "invoice"
-                            ),
-                        )
+                billing_changed = sale_order.partner_invoice_id.id != values[
+                    "partner_invoice_id"
+                ] or (
+                    order_data.get("billing_address")
+                    and not self._is_same_order_address(
+                        sale_order.partner_invoice_id,
+                        self._order_address_values(
+                            partner, order_data["billing_address"], "invoice"
+                        ),
                     )
                 )
-                shipping_changed = (
-                    sale_order.partner_shipping_id.id != values["partner_shipping_id"]
-                    or (
-                        order_data.get("shipping_address")
-                        and not self._is_same_order_address(
-                            sale_order.partner_shipping_id,
-                            self._order_address_values(
-                                partner, order_data["shipping_address"], "delivery"
-                            ),
-                        )
+                shipping_changed = sale_order.partner_shipping_id.id != values[
+                    "partner_shipping_id"
+                ] or (
+                    order_data.get("shipping_address")
+                    and not self._is_same_order_address(
+                        sale_order.partner_shipping_id,
+                        self._order_address_values(
+                            partner, order_data["shipping_address"], "delivery"
+                        ),
                     )
                 )
                 if billing_changed:
