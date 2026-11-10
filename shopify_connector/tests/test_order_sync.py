@@ -347,9 +347,12 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
 
         self.assertFalse(result)
         self.assertEqual(binding.state, "error")
-        self.assertEqual(binding.odoo_id.order_line.filtered(
-            lambda line: not line.shopify_is_shipping
-        ).product_uom_qty, 1)
+        self.assertEqual(
+            binding.odoo_id.order_line.filtered(
+                lambda line: not line.shopify_is_shipping
+            ).product_uom_qty,
+            1,
+        )
 
     def test_order_edit_after_delivery_is_rejected(self):
         binding_id = self.order_model._job_import_order(
