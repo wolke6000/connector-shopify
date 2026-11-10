@@ -31,8 +31,8 @@
 - Never commit directly to shared `19.0`; use focused branches and reviewed PRs.
 - Compare with `OCA/connector-shopify:19.0` before introducing or retaining fork-only
   fixes. Prefer equivalent upstream solutions.
-- Merge upstream into a dedicated integration branch. Never rewrite or force-push
-  shared `19.0` history; resolve conflicts semantically.
+- Merge upstream into a dedicated integration branch. Never rewrite or force-push shared
+  `19.0` history; resolve conflicts semantically.
 - Offer generally useful fixes to OCA in small, independently tested contributions. Do
   not submit Switchology-specific operational policy upstream by default.
 - For OCA contributions, follow current PR and AI-disclosure rules. A human must
@@ -42,8 +42,8 @@
 
 These are Switchology requirements, not assumptions for every connector installation.
 
-- Preserve the ability to disable automatic Odoo customer invoicing and payment
-  posting. Shopify is authoritative for these operations.
+- Preserve the ability to disable automatic Odoo customer invoicing and payment posting.
+  Shopify is authoritative for these operations.
 - Preserve creation-date import cutoffs and independent auto-confirm cutoffs. Already
   synchronized historical orders may receive permitted updates.
 - Preserve idempotency, concurrency safety, durable drift reconciliation and retries,
