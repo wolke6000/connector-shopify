@@ -790,7 +790,11 @@ class ShopifyOrderSync(models.Model):
 
     def _existing_line_snapshot(self, binding, sale_order):
         result = []
-        by_line = {item.odoo_id.id: item for item in binding.line_binding_ids}
+        by_line = {
+            item.odoo_id.id: item
+            for item in binding.line_binding_ids
+            if not item.is_shipping
+        }
         for line in sale_order.order_line:
             line_binding = by_line.get(line.id)
             if line_binding:
