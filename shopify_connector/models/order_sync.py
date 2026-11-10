@@ -658,9 +658,7 @@ class ShopifyOrderSync(models.Model):
                     sale_order.partner_invoice_id.id != values["partner_invoice_id"]
                     or not self._is_same_order_address(
                         sale_order.partner_invoice_id,
-                        self._order_address_values(
-                            partner, billing_address, "invoice"
-                        ),
+                        self._order_address_values(partner, billing_address, "invoice"),
                     )
                 )
                 shipping_changed = has_shipping_details and (
