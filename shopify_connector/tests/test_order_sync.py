@@ -119,9 +119,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertFalse(
             self.order_model._job_import_order(
                 self.instance.id,
-                self._payload(
-                    order_id=901, updatedAt="2026-11-10T10:00:00Z"
-                ),
+                self._payload(order_id=901, updatedAt="2026-11-10T10:00:00Z"),
             )
         )
         self.assertEqual(self.order_model.search_count([]), before)
