@@ -284,6 +284,73 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertAlmostEqual(adjustment.price_unit, 0.01, places=2)
         self.assertFalse(adjustment.tax_ids)
 
+    def test_delivered_order_shipping_does_not_count_as_product_edit(self):
+        shipping = {
+            "id": "gid://shopify/ShippingLine/330",
+            "title": "Standard shipping",
+            "originalPriceSet": self._bag("0.00"),
+            "discountedPriceSet": self._bag("0.00"),
+            "taxLines": [],
+        }
+        payload = self._payload(
+            order_id=330,
+            shippingLines={"nodes": [shipping]},
+        )
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        binding = self.order_model.browse(binding_id)
+
+        self.assertEqual(len(binding.line_binding_ids.filtered("is_shipping")), 1)
+        self.assertEqual(
+            self.order_model._existing_line_snapshot(binding, binding.odoo_id),
+            [{"id": "gid://shopify/LineItem/30", "quantity": 1}],
+        )
+
+        with patch.object(type(self.order_model), "_is_delivered", return_value=True):
+            result = self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(
+                    order_id=330,
+                    shippingLines={"nodes": [shipping]},
+                    updatedAt="2026-01-12T10:00:00Z",
+                ),
+            )
+
+        self.assertEqual(result, binding.id)
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(len(binding.line_binding_ids.filtered("is_shipping")), 1)
+
+    def test_delivered_order_with_shipping_still_rejects_quantity_edit(self):
+        shipping = {
+            "id": "gid://shopify/ShippingLine/331",
+            "title": "Standard shipping",
+            "originalPriceSet": self._bag("0.00"),
+            "discountedPriceSet": self._bag("0.00"),
+            "taxLines": [],
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(order_id=331, shippingLines={"nodes": [shipping]}),
+        )
+        binding = self.order_model.browse(binding_id)
+
+        with patch.object(type(self.order_model), "_is_delivered", return_value=True):
+            result = self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(
+                    order_id=331,
+                    shippingLines={"nodes": [shipping]},
+                    quantity=2,
+                    total="20.00",
+                    updatedAt="2026-01-12T10:00:00Z",
+                ),
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertEqual(binding.odoo_id.order_line.filtered(
+            lambda line: not line.shopify_is_shipping
+        ).product_uom_qty, 1)
+
     def test_order_edit_after_delivery_is_rejected(self):
         binding_id = self.order_model._job_import_order(
             self.instance.id, self._payload(order_id=3)
