@@ -138,7 +138,11 @@ class ShopifyInstanceOrderSync(models.Model):
         # transaction that enqueues the imports. An import returning False,
         # failing, or never running must not lose its coverage when the cursor
         # advances past that Shopify update.
-        orders = self._orders_not_imported_yet(self._fetch_updated_orders(since))
+        orders = self._orders_not_imported_yet(
+            self._orders_eligible_for_automatic_import(
+                self._fetch_updated_orders(since)
+            )
+        )
         pending = dict(self.order_drift_pending or {})
         names = {}
         for order in orders:
@@ -190,6 +194,31 @@ class ShopifyInstanceOrderSync(models.Model):
                 record=self,
             )
         return count
+
+    def _orders_eligible_for_automatic_import(self, orders):
+        """Allow existing synced bindings and new orders created after cutover."""
+        synced_ids = set(
+            self.env["shopify.order"]
+            .search(
+                [
+                    ("instance_id", "=", self.id),
+                    ("shopify_id", "in", [order["id"] for order in orders]),
+                    ("state", "=", "synced"),
+                ]
+            )
+            .mapped("shopify_id")
+        )
+        cutoff = self.order_import_date_from
+        return [
+            order
+            for order in orders
+            if order["id"] in synced_ids
+            or (
+                cutoff
+                and (created := _utc_datetime(order.get("createdAt")))
+                and created.date() >= cutoff
+            )
+        ]
 
     def _orders_not_imported_yet(self, orders):
         imported = {
@@ -414,6 +443,15 @@ class ShopifyOrderSync(models.Model):
             ],
             limit=1,
         )
+        # Unknown historical orders, including failed legacy bindings, must not
+        # be created or retried automatically. Synced bindings may be updated.
+        # This shared job is invoked by webhook, bulk and drift imports.
+        cutoff = instance.order_import_date_from
+        created_at = _utc_datetime(order_data.get("created_at"))
+        if (not binding or binding.state != "synced") and (
+            not cutoff or not created_at or created_at.date() < cutoff
+        ):
+            return False
         if binding and binding.payload_digest == digest and binding.state == "synced":
             return binding.id
         if not binding:

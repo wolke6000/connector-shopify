@@ -27,6 +27,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                 "access_token": "test-token",
                 "webhook_secret": "test-secret",
                 "unknown_product_policy": "block",
+                "order_import_date_from": "2026-01-01",
             }
         )
         cls.instance.state = "connected"
@@ -111,6 +112,111 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         }
         payload.update(values)
         return payload
+
+    def test_cutover_blocks_unbound_old_order_even_when_updated_recently(self):
+        self.instance.order_import_date_from = "2026-02-01"
+        before = self.order_model.search_count([])
+        self.assertFalse(
+            self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(order_id=901, updatedAt="2026-11-10T10:00:00Z"),
+            )
+        )
+        self.assertEqual(self.order_model.search_count([]), before)
+
+    def test_cutover_allows_updates_of_synced_old_orders(self):
+        binding_id = self.order_model._job_import_order(
+            self.instance.id, self._payload(order_id=902)
+        )
+        self.instance.order_import_date_from = "2026-02-01"
+        self.assertEqual(
+            self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(
+                    order_id=902,
+                    quantity=2,
+                    total="20.00",
+                    updatedAt="2026-11-10T10:00:00Z",
+                ),
+            ),
+            binding_id,
+        )
+        self.assertEqual(
+            self.order_model.browse(binding_id).odoo_id.order_line.product_uom_qty,
+            2,
+        )
+
+    def test_cutover_does_not_retry_failed_old_order(self):
+        self.assertFalse(
+            self.order_model._job_import_order(
+                self.instance.id, self._payload(order_id=903, total="10.02")
+            )
+        )
+        binding = self.order_model.search(
+            [
+                ("instance_id", "=", self.instance.id),
+                ("shopify_id", "=", "gid://shopify/Order/903"),
+            ]
+        )
+        self.assertEqual(binding.state, "error")
+        self.instance.order_import_date_from = "2026-02-01"
+        self.assertFalse(
+            self.order_model._job_import_order(
+                self.instance.id, self._payload(order_id=903)
+            )
+        )
+        self.assertEqual(binding.state, "error")
+        self.assertFalse(binding.odoo_id)
+
+    def test_cutover_drift_skips_old_unknown_orders(self):
+        self.instance.order_import_date_from = "2026-11-08"
+        self.instance.order_drift_since = datetime(2026, 11, 8)
+        old_gid = "gid://shopify/Order/904"
+        new_gid = "gid://shopify/Order/905"
+        client = Mock()
+        client.execute.return_value = {
+            "orders": {
+                "nodes": [
+                    {
+                        "id": old_gid,
+                        "name": "#904",
+                        "createdAt": "2026-11-07T23:59:59Z",
+                        "updatedAt": "2026-11-10T10:00:00Z",
+                    },
+                    {
+                        "id": new_gid,
+                        "name": "#905",
+                        "createdAt": "2026-11-08T00:00:00Z",
+                        "updatedAt": "2026-11-10T10:00:00Z",
+                    },
+                ],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
+        with (
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 1)
+        trap.assert_jobs_count(1, only=self.order_model._job_import_order_from_api)
+        self.assertNotIn(old_gid, self.instance.order_drift_pending)
+        self.assertIn(new_gid, self.instance.order_drift_pending)
+
+    def test_cutover_without_date_blocks_unbound_orders(self):
+        self.instance.order_import_date_from = False
+        self.assertFalse(
+            self.order_model._job_import_order(
+                self.instance.id, self._payload(order_id=906)
+            )
+        )
+        self.assertFalse(
+            self.order_model.search(
+                [
+                    ("instance_id", "=", self.instance.id),
+                    ("shopify_id", "=", "gid://shopify/Order/906"),
+                ]
+            )
+        )
 
     def test_order_build_and_edit_are_idempotent(self):
         binding_id = self.order_model._job_import_order(
@@ -418,6 +524,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                         {
                             "id": "gid://shopify/Order/101",
                             "name": "#101",
+                            "createdAt": "2026-10-10T10:00:00Z",
                             "updatedAt": "2026-10-10T10:00:00Z",
                         }
                     ],
@@ -430,6 +537,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                         {
                             "id": "gid://shopify/Order/102",
                             "name": "#102",
+                            "createdAt": "2026-10-10T10:00:00Z",
                             "updatedAt": "2026-10-10T10:00:00Z",
                         }
                     ],
@@ -474,6 +582,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                     {
                         "id": "gid://shopify/Order/102",
                         "name": "#102",
+                        "createdAt": "2026-11-02T10:00:00Z",
                         "updatedAt": "2026-11-02T10:00:00Z",
                     },
                 ],
@@ -568,7 +677,14 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         client = Mock()
         client.execute.return_value = {
             "orders": {
-                "nodes": [{"id": gid, "name": "#501", "updatedAt": stamp}],
+                "nodes": [
+                    {
+                        "id": gid,
+                        "name": "#501",
+                        "createdAt": "2026-01-10T10:00:00Z",
+                        "updatedAt": stamp,
+                    }
+                ],
                 "pageInfo": {"hasNextPage": False},
             }
         }
