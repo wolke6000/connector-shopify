@@ -679,7 +679,14 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         client = Mock()
         client.execute.return_value = {
             "orders": {
-                "nodes": [{"id": gid, "name": "#501", "createdAt": "2026-01-10T10:00:00Z", "updatedAt": stamp}],
+                "nodes": [
+                    {
+                        "id": gid,
+                        "name": "#501",
+                        "createdAt": "2026-01-10T10:00:00Z",
+                        "updatedAt": stamp,
+                    }
+                ],
                 "pageInfo": {"hasNextPage": False},
             }
         }
