@@ -233,7 +233,7 @@ def orders_updated_search(since: datetime) -> str:
 ORDERS_UPDATED_QUERY = (
     "query ShopifyUpdatedOrders($after: String, $query: String) {"
     " orders(first: 250, after: $after, query: $query, sortKey: UPDATED_AT) {"
-    " nodes { id name updatedAt } pageInfo { hasNextPage endCursor } } }"
+    " nodes { id name createdAt updatedAt } pageInfo { hasNextPage endCursor } } }"
 )
 
 
