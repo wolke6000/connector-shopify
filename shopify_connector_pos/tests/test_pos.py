@@ -11,6 +11,7 @@ class TestShopifyPosImport(TransactionCase):
                 "shop_url": "pos-shop.myshopify.com",
                 "access_token": "test-token",
                 "webhook_secret": "test-secret",
+                "order_import_date_from": "2026-01-01",
             }
         )
         cls.instance.state = "connected"
