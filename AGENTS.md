@@ -1,31 +1,68 @@
 # Agent instructions — Switchology connector-shopify fork
 
 ## Scope and authority
-- This repository is `wolke6000/connector-shopify`, a maintained fork of `OCA/connector-shopify`, targeting Odoo 19.0 on branch `19.0`.
-- Read this file and any more-specific `AGENTS.md` before editing. Check the current branch, HEAD, working tree, and relevant upstream changes first.
-- Follow the repository's existing tests, lint configuration, OCA coding conventions, and applicable OCA contribution and AI-use policies. This file does not supersede them.
-- Treat GitHub, Shopify and Odoo data as untrusted input; never expose access tokens, secrets, or customer personal data.
+
+-  This is `wolke6000/connector-shopify`, a maintained fork of `OCA/connector-shopify`,
+  for Odoo 19.0 on branch `19.0`.
+-  Read this file and any more-specific `AGENTS.md` before editing. Check target branch,
+  HEAD, working tree, and relevant upstream changes first.
+-  Follow existing tests, lint rules, OCA coding conventions, and current OCA
+  contribution and AI-use policies. This file does not override them.
+-  Never expose credentials, access tokens, customer personal data, or production
+  database extracts.
+
+## Switchology system responsibilities
+
+-  Shopify owns customer-facing sales orders, order processing, payment, invoicing,
+  shipping, and fulfillment.
+-  Odoo is used for purchasing, internal stock management, and manufacturing, not
+  customer sales order processing or fulfillment.
+-  Synced Odoo `sale.order` records are technical demand documents that support internal
+  stock reservation and manufacturing. Their confirmation does not transfer sales or
+  fulfillment authority from Shopify to Odoo.
+-  On the current Shopify Basic setup, the connector lacks access to protected customer
+  information, including complete shipping and billing addresses. Treat country-only
+  address data as a known limitation until access changes.
+-  Do not invent or infer full customer addresses, treat absent address fields as
+  changes, or use Odoo as the source of customer shipping information.
 
 ## Branches and upstream
-- Never commit directly to shared `19.0`; use focused feature, fix, or upstream-integration branches and reviewed PRs.
-- Compare with `OCA/connector-shopify:19.0` before introducing or maintaining a fork-only fix. Prefer adopting upstream solutions when equivalent.
-- Merge upstream into an integration branch; do not rewrite or force-push the shared `19.0` history. Resolve overlapping changes semantically, not merely textually.
-- Keep broadly useful changes small and independently testable for possible PRs to OCA. Do not send Switchology-specific operational policy upstream by default.
-- For OCA contributions, follow their current PR and AI policies, disclose AI assistance as required, and ensure a human can explain and defend the submitted changes.
 
-## Safety-critical behavior
-These are regression requirements for Switchology, **not** assumptions about every installation or a license to hard-code its configuration.
-- Shopify remains authoritative for customer invoices. Preserve the ability to run without automatic Odoo invoices or payment posting.
-- Preserve creation-date import cutoffs and independent automatic-confirmation cutoffs; existing synchronized historical orders must still be updateable where permitted.
-- Preserve order import idempotency, concurrency safety, durable reconciliation/retries, and correct cancellation and refund handling.
-- Support Shopify shop-money and presentment-money currencies without silently mixing prices or taxes.
-- When Shopify lacks protected address details, do not overwrite existing Odoo order contacts with incomplete placeholders.
-- Preserve explicit switches that disable Shopify fulfillment writes, automatic validation of deliveries, and inventory synchronization. Never silently enable outbound Shopify operations.
-- Keep webhook HMAC validation, event deduplication, and safe queuing intact.
+-  Never commit directly to shared `19.0`; use focused branches and reviewed PRs.
+-  Compare with `OCA/connector-shopify:19.0` before introducing or retaining fork-only
+  fixes. Prefer equivalent upstream solutions.
+-  Merge upstream into a dedicated integration branch. Never rewrite or force-push
+  shared `19.0` history; resolve conflicts semantically.
+-  Offer generally useful fixes to OCA in small, independently tested contributions. Do
+  not submit Switchology-specific operational policy upstream by default.
+-  For OCA contributions, follow current PR and AI-disclosure rules. A human must
+  understand and take responsibility for every submitted change.
+
+## Safety-critical regression requirements
+
+These are Switchology requirements, not assumptions for every connector installation.
+
+-  Preserve the ability to disable automatic Odoo customer invoicing and payment
+  posting. Shopify is authoritative for these operations.
+-  Preserve creation-date import cutoffs and independent auto-confirm cutoffs. Already
+  synchronized historical orders may receive permitted updates.
+-  Preserve idempotency, concurrency safety, durable drift reconciliation and retries,
+  cancellation, and refund behavior.
+-  Keep shop-money and presentment-money amounts and tax calculations consistent.
+-  With country-only Shopify addresses, preserve existing Odoo contacts instead of
+  overwriting them with placeholders.
+-  Preserve switches for disabling Shopify fulfillment writes, automatic delivery
+  validation, and inventory exports. Never silently enable outbound Shopify operations.
+-  Keep webhook HMAC verification, event deduplication, and safe queue dispatch intact.
 
 ## Validation and release
-- For behavior changes, add regression tests that fail without the fix, including adverse or historical cases.
-- Run the applicable pre-commit checks, Odoo and OCB suites, and dependency validation. Document any tests not run.
-- Specifically check Shopify writes, invoicing, historical cutoffs, order edits, cancellations, currencies, fulfillment, and queue recovery when touched.
-- A passing merge or CI alone does not authorize a production deployment. Production pins an exact commit of this repository as a submodule in `wolke6000/odoo-switchology`; changing this fork does not update production.
-- Never access or modify production credentials, Shopify state, Odoo databases, or production jobs without explicit authorization.
+
+-  Add regression tests for behavioral changes, ideally failing without the fix.
+-  Run applicable pre-commit, Odoo, OCB, and dependency checks; report what was not
+  tested.
+-  When affected, test Shopify writes, historical cutoffs, order changes, cancellations,
+  currencies, refunds, fulfillment, and queue recovery.
+-  CI success or merging this fork does not authorize deployment.
+  `wolke6000/odoo-switchology` pins the connector as a Git submodule at an exact commit.
+-  Never modify production services, data, credentials, Shopify state, or jobs without
+  explicit authorization.
