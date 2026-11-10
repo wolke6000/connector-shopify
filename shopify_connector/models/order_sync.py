@@ -603,14 +603,28 @@ class ShopifyOrderSync(models.Model):
         currency = self._currency(instance, order_data)
         partner = self._partner(instance, order_data)
         pricelist = self._pricelist(instance, currency)
+        shipping_address = order_data.get("shipping_address")
+        billing_address = order_data.get("billing_address")
+        has_shipping_details = self._has_order_address_details(shipping_address)
+        has_billing_details = self._has_order_address_details(billing_address)
+        # On Shopify plans without protected customer data we may receive only
+        # countryCodeV2. That cannot establish a contact/address change.
+        # Preserve existing Odoo contacts rather than replacing them with the
+        # guest partner (or treating the absence of PII as address drift).
+        shipping_partner = (
+            sale_order.partner_shipping_id
+            if sale_order and not has_shipping_details
+            else self._order_address_partner(partner, shipping_address, "delivery")
+        )
+        billing_partner = (
+            sale_order.partner_invoice_id
+            if sale_order and not has_billing_details
+            else self._order_address_partner(partner, billing_address, "invoice")
+        )
         values = {
             "partner_id": partner.id,
-            "partner_shipping_id": self._order_address_partner(
-                partner, order_data.get("shipping_address"), "delivery"
-            ).id,
-            "partner_invoice_id": self._order_address_partner(
-                partner, order_data.get("billing_address"), "invoice"
-            ).id,
+            "partner_shipping_id": shipping_partner.id,
+            "partner_invoice_id": billing_partner.id,
             "company_id": instance.company_id.id,
             "pricelist_id": pricelist.id,
             "currency_id": currency.id,
@@ -640,25 +654,19 @@ class ShopifyOrderSync(models.Model):
                 # Do not rely solely on contact IDs: two Shopify address
                 # versions can reuse the same partner if a material field
                 # (phone/province/company) was left out of matching.
-                billing_changed = sale_order.partner_invoice_id.id != values[
-                    "partner_invoice_id"
-                ] or (
-                    order_data.get("billing_address")
-                    and not self._is_same_order_address(
+                billing_changed = has_billing_details and (
+                    sale_order.partner_invoice_id.id != values["partner_invoice_id"]
+                    or not self._is_same_order_address(
                         sale_order.partner_invoice_id,
-                        self._order_address_values(
-                            partner, order_data["billing_address"], "invoice"
-                        ),
+                        self._order_address_values(partner, billing_address, "invoice"),
                     )
                 )
-                shipping_changed = sale_order.partner_shipping_id.id != values[
-                    "partner_shipping_id"
-                ] or (
-                    order_data.get("shipping_address")
-                    and not self._is_same_order_address(
+                shipping_changed = has_shipping_details and (
+                    sale_order.partner_shipping_id.id != values["partner_shipping_id"]
+                    or not self._is_same_order_address(
                         sale_order.partner_shipping_id,
                         self._order_address_values(
-                            partner, order_data["shipping_address"], "delivery"
+                            partner, shipping_address, "delivery"
                         ),
                     )
                 )
@@ -709,10 +717,14 @@ class ShopifyOrderSync(models.Model):
         self._verify_total(sale_order, currency, instance, order_data)
         return sale_order
 
+    @staticmethod
+    def _has_order_address_details(address):
+        return bool(
+            address and any(address.get(key) for key in ("address1", "city", "zip"))
+        )
+
     def _order_address_partner(self, partner, address, address_type):
-        if not address or not any(
-            address.get(key) for key in ("address1", "city", "zip")
-        ):
+        if not self._has_order_address_details(address):
             return partner
         values = self._order_address_values(partner, address, address_type)
         for candidate in partner | partner.child_ids:

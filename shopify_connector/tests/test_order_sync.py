@@ -845,6 +845,72 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertTrue(sale.invoice_ids)
         self.assertTrue(all(i.state == "posted" for i in sale.invoice_ids))
 
+    def test_confirmed_country_only_addresses_preserve_existing_contacts(self):
+        self.instance.order_confirmation_policy = "auto"
+        shipping = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Shipping 1",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        billing = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Billing 2",
+            "city": "Vienna",
+            "zip": "1020",
+            "countryCodeV2": "AT",
+        }
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                shippingAddress=shipping,
+                billingAddress=billing,
+                displayFinancialStatus="PAID",
+            ),
+        )
+        binding = self.order_model.browse(binding_id)
+        sale = binding.odoo_id
+        shipping_contact = sale.partner_shipping_id
+        billing_contact = sale.partner_invoice_id
+        self.assertEqual(sale.state, "sale")
+        self.assertNotEqual(shipping_contact, billing_contact)
+        self.assertNotEqual(shipping_contact, sale.partner_id)
+        self.assertNotEqual(billing_contact, sale.partner_id)
+
+        # Shopify Basic can expose the destination country but no address PII.
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                shippingAddress={"countryCodeV2": "AT"},
+                billingAddress={"countryCodeV2": "AT"},
+                displayFinancialStatus="PAID",
+                updatedAt="2026-01-12T10:00:00Z",
+            ),
+        )
+        self.assertEqual(result, binding.id)
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(sale.partner_shipping_id, shipping_contact)
+        self.assertEqual(sale.partner_invoice_id, billing_contact)
+
+        # An entirely omitted address must not clear existing contacts either.
+        result = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=507,
+                displayFinancialStatus="PAID",
+                updatedAt="2026-01-13T10:00:00Z",
+            ),
+        )
+        self.assertEqual(result, binding.id)
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(sale.partner_shipping_id, shipping_contact)
+        self.assertEqual(sale.partner_invoice_id, billing_contact)
+
     def test_confirmed_order_billing_address_drift_is_actionable(self):
         self.instance.order_confirmation_policy = "auto"
         original = {
