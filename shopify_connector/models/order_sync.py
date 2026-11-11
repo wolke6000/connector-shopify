@@ -607,18 +607,31 @@ class ShopifyOrderSync(models.Model):
         billing_address = order_data.get("billing_address")
         has_shipping_details = self._has_order_address_details(shipping_address)
         has_billing_details = self._has_order_address_details(billing_address)
-        # On Shopify plans without protected customer data we may receive only
-        # countryCodeV2. That cannot establish a contact/address change.
-        # Preserve existing Odoo contacts rather than replacing them with the
-        # guest partner (or treating the absence of PII as address drift).
+        # Country-only responses must not erase previously known addresses.
+        # Before protected data was available, confirmed orders used the guest
+        # contact. Their first full address snapshot is not a known address
+        # change: preserve those contacts and the existing stock operations.
+        legacy_confirmed_guest = bool(
+            sale_order
+            and sale_order.state not in ("draft", "sent")
+            and sale_order.partner_id == instance.guest_partner_id
+        )
+        preserve_guest_shipping = (
+            legacy_confirmed_guest
+            and sale_order.partner_shipping_id == instance.guest_partner_id
+        )
+        preserve_guest_billing = (
+            legacy_confirmed_guest
+            and sale_order.partner_invoice_id == instance.guest_partner_id
+        )
         shipping_partner = (
             sale_order.partner_shipping_id
-            if sale_order and not has_shipping_details
+            if sale_order and (not has_shipping_details or preserve_guest_shipping)
             else self._order_address_partner(partner, shipping_address, "delivery")
         )
         billing_partner = (
             sale_order.partner_invoice_id
-            if sale_order and not has_billing_details
+            if sale_order and (not has_billing_details or preserve_guest_billing)
             else self._order_address_partner(partner, billing_address, "invoice")
         )
         values = {
@@ -654,20 +667,28 @@ class ShopifyOrderSync(models.Model):
                 # Do not rely solely on contact IDs: two Shopify address
                 # versions can reuse the same partner if a material field
                 # (phone/province/company) was left out of matching.
-                billing_changed = has_billing_details and (
-                    sale_order.partner_invoice_id.id != values["partner_invoice_id"]
-                    or not self._is_same_order_address(
-                        sale_order.partner_invoice_id,
-                        self._order_address_values(partner, billing_address, "invoice"),
+                billing_changed = (
+                    has_billing_details
+                    and not preserve_guest_billing
+                    and (
+                        sale_order.partner_invoice_id.id != values["partner_invoice_id"]
+                        or not self._is_same_order_address(
+                            sale_order.partner_invoice_id,
+                            self._order_address_values(partner, billing_address, "invoice"),
+                        )
                     )
                 )
-                shipping_changed = has_shipping_details and (
-                    sale_order.partner_shipping_id.id != values["partner_shipping_id"]
-                    or not self._is_same_order_address(
-                        sale_order.partner_shipping_id,
-                        self._order_address_values(
-                            partner, shipping_address, "delivery"
-                        ),
+                shipping_changed = (
+                    has_shipping_details
+                    and not preserve_guest_shipping
+                    and (
+                        sale_order.partner_shipping_id.id != values["partner_shipping_id"]
+                        or not self._is_same_order_address(
+                            sale_order.partner_shipping_id,
+                            self._order_address_values(
+                                partner, shipping_address, "delivery"
+                            ),
+                        )
                     )
                 )
                 if billing_changed:
