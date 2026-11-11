@@ -684,7 +684,8 @@ class ShopifyOrderSync(models.Model):
                     has_shipping_details
                     and not preserve_guest_shipping
                     and (
-                        sale_order.partner_shipping_id.id != values["partner_shipping_id"]
+                        sale_order.partner_shipping_id.id
+                        != values["partner_shipping_id"]
                         or not self._is_same_order_address(
                             sale_order.partner_shipping_id,
                             self._order_address_values(
