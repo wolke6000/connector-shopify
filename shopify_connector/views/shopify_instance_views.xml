@@ -80,6 +80,7 @@
                                         invisible="not client_id"
                                     />
                                     <field name="api_version" />
+                                    <field name="shopify_write_policy" />
                                 </group>
                                 <group string="Odoo">
                                     <field

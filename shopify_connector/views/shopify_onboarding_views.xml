@@ -20,6 +20,7 @@
                     <group string="App Credentials">
                         <field name="client_id" />
                         <field name="webhook_secret" password="True" />
+                        <field name="shopify_write_policy" />
                         <field
                             name="access_token"
                             password="True"

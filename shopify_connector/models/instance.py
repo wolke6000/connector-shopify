@@ -89,6 +89,12 @@ class ShopifyInstance(models.Model):
         groups="shopify_connector.group_shopify_manager",
         help="Shopify app client secret, also used to verify webhook HMAC signatures.",
     )
+    shopify_write_policy = fields.Selection(
+        [("full", "All configured writes"), ("inventory_only", "Inventory only")],
+        required=True,
+        default="full",
+        help="Block product, customer and fulfillment writes, but allow inventory writes.",
+    )
     accept_webhooks = fields.Boolean(
         default=True,
         help="Disable to reject webhook delivery for this instance.",

@@ -18,6 +18,8 @@ class ShopifyProductExportWizard(models.TransientModel):
 
     def action_export(self):
         self.ensure_one()
+        if self.instance_id.shopify_write_policy == "inventory_only":
+            raise UserError(self.env._("Product exports are disabled."))
         if self.instance_id.state != "connected":
             raise UserError(
                 self.env._("Connect the Shopify instance before exporting.")

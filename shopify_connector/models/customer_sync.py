@@ -575,7 +575,11 @@ class ShopifyCustomerSync(models.Model):
     def _enqueue_customer_export(self):
         for binding in self:
             instance = binding.instance_id
-            if not instance.active or not instance.customer_export_enabled:
+            if (
+                not instance.active
+                or not instance.customer_export_enabled
+                or instance.shopify_write_policy == "inventory_only"
+            ):
                 continue
             binding.with_delay(
                 description=self.env._(
@@ -587,7 +591,11 @@ class ShopifyCustomerSync(models.Model):
     def _job_export_customer(self):
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active or not self.instance_id.customer_export_enabled:
+        if (
+            not self.instance_id.active
+            or not self.instance_id.customer_export_enabled
+            or self.instance_id.shopify_write_policy == "inventory_only"
+        ):
             return False
         values = {"id": self.shopify_id}
         owners = self.instance_id._customer_field_owners()

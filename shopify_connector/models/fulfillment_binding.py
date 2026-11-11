@@ -1,7 +1,7 @@
 # pylint: disable=consider-merging-classes-inherited
 
 from odoo import api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 
 
 class ShopifyFulfillmentOrder(models.Model):
@@ -77,6 +77,8 @@ class ShopifyFulfillmentOrder(models.Model):
 
     def action_release_hold(self):
         for binding in self:
+            if binding.instance_id.shopify_write_policy == "inventory_only":
+                raise UserError(self.env._("Fulfillment writes are disabled."))
             binding.with_delay(
                 description=self.env._(
                     "Release Shopify fulfillment hold %s", binding.shopify_id
@@ -246,6 +248,8 @@ class ShopifyFulfillment(models.Model):
 
     def action_cancel_shopify(self):
         for fulfillment in self.filtered("shopify_id"):
+            if fulfillment.instance_id.shopify_write_policy == "inventory_only":
+                raise UserError(self.env._("Fulfillment writes are disabled."))
             fulfillment.with_delay(
                 description=self.env._(
                     "Cancel Shopify fulfillment %s", fulfillment.shopify_id

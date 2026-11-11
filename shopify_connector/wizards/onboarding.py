@@ -14,15 +14,21 @@ from ..lib.operability import missing_scopes, scope_handles
 REQUIRED_ADMIN_SCOPES = (
     "read_customers",
     "read_draft_orders",
+    "read_fulfillments",
     "read_inventory",
     "read_locations",
     "read_merchant_managed_fulfillment_orders",
     "read_orders",
     "read_products",
+    "read_returns",
     "write_customers",
     "write_inventory",
     "write_merchant_managed_fulfillment_orders",
     "write_products",
+)
+INVENTORY_ONLY_ADMIN_SCOPES = tuple(
+    scope for scope in REQUIRED_ADMIN_SCOPES
+    if not scope.startswith("write_") or scope == "write_inventory"
 )
 
 
@@ -69,6 +75,11 @@ class ShopifyInstanceWizard(models.TransientModel):
         "res.company",
         required=True,
         default=lambda self: self.env.company,
+    )
+    shopify_write_policy = fields.Selection(
+        [("full", "All configured writes"), ("inventory_only", "Inventory only")],
+        required=True,
+        default="full",
     )
     required_scopes = fields.Text(readonly=True)
     granted_scopes = fields.Text(readonly=True)
@@ -130,7 +141,6 @@ class ShopifyInstanceWizard(models.TransientModel):
             .browse(self.env.context.get("active_id"))
             .exists()
         )
-        values["required_scopes"] = "\n".join(REQUIRED_ADMIN_SCOPES)
         if instance:
             values.update(
                 {
@@ -139,6 +149,7 @@ class ShopifyInstanceWizard(models.TransientModel):
                     "shop_url": instance.shop_url,
                     "client_id": instance.client_id,
                     "webhook_secret": instance.webhook_secret,
+                    "shopify_write_policy": instance.shopify_write_policy,
                     "company_id": instance.company_id.id,
                     "order_confirmation_policy": (instance.order_confirmation_policy),
                     "order_invoicing_policy": (instance.order_invoicing_policy),
@@ -154,7 +165,18 @@ class ShopifyInstanceWizard(models.TransientModel):
             if not instance.client_id:
                 # A managed instance fetches its own token: nothing to type in.
                 values["access_token"] = instance.access_token
+        values["required_scopes"] = "\n".join(
+            self._required_admin_scopes_for_policy(
+                values.get("shopify_write_policy", "full")
+            )
+        )
         return values
+
+    @staticmethod
+    def _required_admin_scopes_for_policy(policy):
+        if policy == "inventory_only":
+            return INVENTORY_ONLY_ADMIN_SCOPES
+        return REQUIRED_ADMIN_SCOPES
 
     def _reopen(self):
         self.ensure_one()
@@ -181,6 +203,7 @@ class ShopifyInstanceWizard(models.TransientModel):
             "shop_url": self.shop_url,
             "client_id": self.client_id,
             "webhook_secret": self.webhook_secret,
+            "shopify_write_policy": self.shopify_write_policy,
             "company_id": self.company_id.id,
             "active": True,
         }
@@ -199,9 +222,13 @@ class ShopifyInstanceWizard(models.TransientModel):
         self.ensure_one()
         payload = self.instance_id._shopify_client().execute(CURRENT_APP_SCOPES_QUERY)
         granted = scope_handles(payload)
-        missing = missing_scopes(granted, REQUIRED_ADMIN_SCOPES)
+        required = self._required_admin_scopes_for_policy(
+            self.instance_id.shopify_write_policy
+        )
+        missing = missing_scopes(granted, required)
         self.write(
             {
+                "required_scopes": "\n".join(required),
                 "granted_scopes": "\n".join(sorted(granted)),
                 "missing_scopes": "\n".join(missing),
                 "scope_check_ok": not missing,

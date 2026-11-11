@@ -1123,7 +1123,7 @@ class ShopifyProductTemplateSync(models.Model):
 
     @api.model
     def _enqueue_product_export(self, instance, template):
-        if not instance.active:
+        if not instance.active or instance.shopify_write_policy == "inventory_only":
             return False
         binding = self.search(
             [
@@ -1151,7 +1151,12 @@ class ShopifyProductTemplateSync(models.Model):
             .browse(template_id)
             .exists()
         )
-        if not instance or not instance.active or not template:
+        if (
+            not instance
+            or not instance.active
+            or not template
+            or instance.shopify_write_policy == "inventory_only"
+        ):
             return False
         if instance.state != "connected":
             raise UserError(

@@ -368,7 +368,9 @@ class ShopifyOrderFulfillmentSync(models.Model):
         self = self.sudo()
         self.ensure_one()
         if not (
-            self.instance_id.active and self.instance_id.fulfillment_export_enabled
+            self.instance_id.active
+            and self.instance_id.fulfillment_export_enabled
+            and self.instance_id.shopify_write_policy != "inventory_only"
         ):
             return False
         picking = self.env["stock.picking"].browse(picking_id).exists()
@@ -619,7 +621,10 @@ class ShopifyFulfillmentOrderActions(models.Model):
     def _job_release_hold(self):
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active:
+        if (
+            not self.instance_id.active
+            or self.instance_id.shopify_write_policy == "inventory_only"
+        ):
             return False
         hold_ids = [
             hold["id"] for hold in (self.fulfillment_holds or []) if hold.get("id")
@@ -656,7 +661,10 @@ class ShopifyFulfillmentActions(models.Model):
     def _job_cancel_shopify(self):
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active:
+        if (
+            not self.instance_id.active
+            or self.instance_id.shopify_write_policy == "inventory_only"
+        ):
             return False
         if not self.shopify_id:
             raise ShopifyFulfillmentError(
@@ -716,6 +724,7 @@ class StockPickingShopifyFulfillmentSync(models.Model):
                     not item.is_draft
                     and item.state == "synced"
                     and item.instance_id.fulfillment_export_enabled
+                    and item.instance_id.shopify_write_policy != "inventory_only"
                 )
             )
             for binding in bindings:
