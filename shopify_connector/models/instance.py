@@ -93,7 +93,10 @@ class ShopifyInstance(models.Model):
         [("full", "All configured writes"), ("inventory_only", "Inventory only")],
         required=True,
         default="full",
-        help="Block product, customer and fulfillment writes, but allow inventory writes.",
+        help=(
+            "Block product, customer and fulfillment writes, "
+            "but allow inventory writes."
+        ),
     )
     accept_webhooks = fields.Boolean(
         default=True,
