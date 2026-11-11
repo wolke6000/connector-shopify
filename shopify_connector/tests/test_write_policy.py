@@ -10,7 +10,19 @@ from ..wizards.onboarding import (
 
 
 class TestShopifyWritePolicy(TransactionCase):
-    def test_inventory_only_scope_requirements(self):
+    def _instance(self, name, **values):
+        return self.env["shopify.instance"].create(
+            {
+                "name": name,
+                "shop_url": f"{name}.myshopify.com",
+                "access_token": "test-token",
+                "webhook_secret": "test-secret",
+                "shopify_write_policy": "inventory_only",
+                **values,
+            }
+        )
+
+    def test_inventory_only_scopes(self):
         wizard = self.env["shopify.instance.wizard"]
         required = set(wizard._required_admin_scopes_for_policy("inventory_only"))
         self.assertEqual(required, set(INVENTORY_ONLY_ADMIN_SCOPES))
@@ -18,47 +30,56 @@ class TestShopifyWritePolicy(TransactionCase):
             {"write_inventory", "read_fulfillments", "read_returns"} <= required
         )
         self.assertFalse(
-            {"write_products", "write_customers",
-             "write_merchant_managed_fulfillment_orders"} & required
+            {
+                "write_products",
+                "write_customers",
+                "write_merchant_managed_fulfillment_orders",
+            }
+            & required
         )
 
-    def test_full_scope_requirements_are_preserved(self):
+    def test_full_scopes_remain_available(self):
         wizard = self.env["shopify.instance.wizard"]
         self.assertEqual(
             tuple(wizard._required_admin_scopes_for_policy("full")),
             REQUIRED_ADMIN_SCOPES,
         )
 
-    def test_inventory_only_blocks_customer_export(self):
-        instance = self.env["shopify.instance"].create({
-            "name": "Read-only customers",
-            "shop_url": "inventory-only-test.myshopify.com",
-            "access_token": "test-token",
-            "webhook_secret": "test-secret",
-            "shopify_write_policy": "inventory_only",
-            "customer_export_enabled": True,
-        })
-        binding = self.env["shopify.customer"].create({
-            "instance_id": instance.id,
-            "shopify_id": "gid://shopify/Customer/12345",
-            "odoo_id": self.env.company.partner_id.id,
-        })
+    def test_customer_export_job_is_blocked(self):
+        instance = self._instance("customer-write-policy", customer_export_enabled=True)
+        binding = self.env["shopify.customer"].create(
+            {
+                "instance_id": instance.id,
+                "shopify_id": "gid://shopify/Customer/12345",
+                "odoo_id": self.env.company.partner_id.id,
+            }
+        )
         client = Mock()
         with patch.object(type(instance), "_shopify_client", return_value=client):
             self.assertFalse(binding._job_export_customer())
         client.execute.assert_not_called()
 
-    def test_inventory_only_blocks_manual_product_exports(self):
-        instance = self.env["shopify.instance"].create({
-            "name": "Inventory only product",
-            "shop_url": "inventory-only-export.myshopify.com",
-            "access_token": "test-token",
-            "webhook_secret": "test-secret",
-            "shopify_write_policy": "inventory_only",
-        })
-        wizard = self.env["shopify.product.export.wizard"].create({
-            "instance_id": instance.id,
-            "product_tmpl_ids": [(6, 0, [self.env.ref("product.product_product_4").product_tmpl_id.id])],
-        })
+    def test_product_export_job_is_blocked(self):
+        instance = self._instance("product-write-policy")
+        template = self.env["product.template"].create(
+            {"name": "Test product", "company_id": self.env.company.id}
+        )
+        client = Mock()
+        with patch.object(type(instance), "_shopify_client", return_value=client):
+            self.assertFalse(
+                self.env["shopify.product.template"]._job_export_product(
+                    instance.id, template.id
+                )
+            )
+        client.execute.assert_not_called()
+
+    def test_manual_product_export_is_blocked(self):
+        instance = self._instance("manual-write-policy")
+        template = self.env["product.template"].create(
+            {"name": "Manual product", "company_id": self.env.company.id}
+        )
+        wizard = self.env["shopify.product.export.wizard"].create(
+            {"instance_id": instance.id, "product_tmpl_ids": [(6, 0, [template.id])]}
+        )
         with self.assertRaises(UserError):
             wizard.action_export()
