@@ -27,7 +27,8 @@ REQUIRED_ADMIN_SCOPES = (
     "write_products",
 )
 INVENTORY_ONLY_ADMIN_SCOPES = tuple(
-    scope for scope in REQUIRED_ADMIN_SCOPES
+    scope
+    for scope in REQUIRED_ADMIN_SCOPES
     if not scope.startswith("write_") or scope == "write_inventory"
 )
 
