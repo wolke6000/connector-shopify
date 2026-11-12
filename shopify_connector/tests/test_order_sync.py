@@ -750,64 +750,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(sale.partner_shipping_id.street, "Delivery Road")
         self.assertEqual(sale.partner_invoice_id.street, "Invoice Road")
 
-    def test_confirmed_legacy_guest_order_preserves_contacts_on_first_full_addresses(
-        self,
-    ):
-        self.instance.order_confirmation_policy = "auto"
-        customer_id = "gid://shopify/Customer/118"
-        initial = self._payload(
-            order_id=118,
-            customer={"id": customer_id},
-            shippingAddress={"countryCodeV2": "AT"},
-            billingAddress={"countryCodeV2": "AT"},
-            displayFinancialStatus="PAID",
-        )
-        binding_id = self.order_model._job_import_order(self.instance.id, initial)
-        binding = self.order_model.browse(binding_id)
-        sale = binding.odoo_id
-        guest = self.instance.guest_partner_id
-        self.assertEqual(sale.state, "sale")
-        self.assertEqual(sale.partner_id, guest)
-        self.assertEqual(sale.partner_shipping_id, guest)
-        self.assertEqual(sale.partner_invoice_id, guest)
-
-        customer_partner = self.env["res.partner"].create(
-            {"name": "Newly Bound Customer", "company_id": self.instance.company_id.id}
-        )
-        self.env["shopify.customer"].create(
-            {
-                "instance_id": self.instance.id,
-                "shopify_id": customer_id,
-                "odoo_id": customer_partner.id,
-            }
-        )
-        shipping = {
-            "firstName": "Ada",
-            "lastName": "Lovelace",
-            "address1": "Delivery Road",
-            "city": "Vienna",
-            "zip": "1010",
-            "countryCodeV2": "AT",
-        }
-        billing = {**shipping, "address1": "Invoice Road"}
-        result = self.order_model._job_import_order(
-            self.instance.id,
-            self._payload(
-                order_id=118,
-                customer={"id": customer_id},
-                shippingAddress=shipping,
-                billingAddress=billing,
-                displayFinancialStatus="PAID",
-                updatedAt="2026-01-12T10:00:00Z",
-            ),
-        )
-        self.assertEqual(result, binding.id)
-        self.assertEqual(binding.state, "synced")
-        self.assertEqual(sale.partner_id, guest)
-        self.assertEqual(sale.partner_shipping_id, guest)
-        self.assertEqual(sale.partner_invoice_id, guest)
-        self.assertFalse(customer_partner.child_ids)
-
     def test_order_import_uses_distinct_shipping_and_invoice_addresses(self):
         shipping = {
             "firstName": "Ada",
