@@ -7,6 +7,12 @@ from odoo import SUPERUSER_ID
 
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
 from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.graphql.order import (
+    ADDRESS_FIELDS,
+    DRAFT_ORDER_BY_ID_QUERY,
+    DRAFT_ORDERS_QUERY,
+    ORDER_BY_ID_QUERY,
+)
 from odoo.addons.shopify_connector.lib.client import ShopifyError
 
 
@@ -681,6 +687,68 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         ):
             self.instance._job_sync_updated_orders()
         self.assertEqual(self.instance.order_drift_since, original)
+
+    def test_order_queries_request_full_upstream_addresses(self):
+        self.assertEqual(
+            set(ADDRESS_FIELDS.split()),
+            {
+                "firstName",
+                "lastName",
+                "company",
+                "address1",
+                "address2",
+                "city",
+                "provinceCode",
+                "countryCodeV2",
+                "zip",
+                "phone",
+            },
+        )
+        for query in (
+            ORDER_BY_ID_QUERY,
+            DRAFT_ORDER_BY_ID_QUERY,
+            DRAFT_ORDERS_QUERY,
+        ):
+            with self.subTest(query=query[:50]):
+                self.assertIn(f"shippingAddress {{ {ADDRESS_FIELDS} }}", query)
+                self.assertIn(f"billingAddress {{ {ADDRESS_FIELDS} }}", query)
+
+    def test_new_order_uses_bound_customer_and_full_addresses(self):
+        customer_id = "gid://shopify/Customer/117"
+        customer_partner = self.env["res.partner"].create(
+            {"name": "Bound Customer", "company_id": self.instance.company_id.id}
+        )
+        self.env["shopify.customer"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": customer_id,
+                "odoo_id": customer_partner.id,
+            }
+        )
+        shipping = {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "address1": "Delivery Road",
+            "city": "Vienna",
+            "zip": "1010",
+            "countryCodeV2": "AT",
+        }
+        billing = {**shipping, "address1": "Invoice Road"}
+        binding_id = self.order_model._job_import_order(
+            self.instance.id,
+            self._payload(
+                order_id=117,
+                customer={"id": customer_id},
+                shippingAddress=shipping,
+                billingAddress=billing,
+            ),
+        )
+        sale = self.order_model.browse(binding_id).odoo_id
+        self.assertEqual(sale.partner_id, customer_partner)
+        self.assertEqual(sale.partner_shipping_id.parent_id, customer_partner)
+        self.assertEqual(sale.partner_invoice_id.parent_id, customer_partner)
+        self.assertEqual(sale.partner_shipping_id.street, "Delivery Road")
+        self.assertEqual(sale.partner_invoice_id.street, "Invoice Road")
 
     def test_order_import_uses_distinct_shipping_and_invoice_addresses(self):
         shipping = {
