@@ -20,11 +20,15 @@
 - Synced Odoo `sale.order` records are technical demand documents that support internal
   stock reservation and manufacturing. Their confirmation does not transfer sales or
   fulfillment authority from Shopify to Odoo.
-- On the current Shopify Basic setup, the connector lacks access to protected customer
-  information, including complete shipping and billing addresses. Treat country-only
-  address data as a known limitation until access changes.
-- Do not invent or infer full customer addresses, treat absent address fields as
-  changes, or use Odoo as the source of customer shipping information.
+- The Shopify app is now approved to access protected customer information, including
+  full shipping and billing addresses. PR #11 restored the upstream GraphQL order
+  address fields on this fork's 19.0 branch. A merged change is not a deployment: verify
+  the pinned Odoo submodule and runtime API responses before relying on complete address
+  data.
+- Historical imported order payloads may contain only country-level fields. Do not
+  invent or infer missing addresses, treat absent fields as changes, mistake a current
+  customer default address for an order-specific historical address, or use Odoo as the
+  source of customer shipping information.
 
 ## Branches and upstream
 
@@ -49,8 +53,10 @@ These are Switchology requirements, not assumptions for every connector installa
 - Preserve idempotency, concurrency safety, durable drift reconciliation and retries,
   cancellation, and refund behavior.
 - Keep shop-money and presentment-money amounts and tax calculations consistent.
-- With country-only Shopify addresses, preserve existing Odoo contacts instead of
-  overwriting them with placeholders.
+- Preserve existing Odoo contacts when an order payload still contains only
+  country-level or otherwise incomplete addresses; do not overwrite them with
+  placeholders. Verify full-address reimports against legacy bindings before production
+  deployment.
 - Preserve switches for disabling Shopify fulfillment writes, automatic delivery
   validation, and inventory exports. Never silently enable outbound Shopify operations.
 - Keep webhook HMAC verification, event deduplication, and safe queue dispatch intact.
