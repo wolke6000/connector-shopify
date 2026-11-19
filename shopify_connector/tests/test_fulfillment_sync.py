@@ -127,8 +127,6 @@ class TestShopifyFulfillmentSync(TransactionCase):
         )
         self.instance.fulfillment_export_enabled = False
         with patch.object(type(self.instance), "_shopify_client") as client:
-            from odoo.exceptions import UserError
-
             with self.assertRaises(UserError):
                 fulfillment.action_cancel_shopify()
             self.assertFalse(fulfillment._job_cancel_shopify())
