@@ -167,4 +167,3 @@ class TestShopifyExportPolicy(TransactionCase):
                 }
             )
         )
-
