@@ -90,7 +90,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             }
         )
 
-
     def _bag(self, amount):
         return {
             "shopMoney": {
