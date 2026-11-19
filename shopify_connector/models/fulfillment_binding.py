@@ -335,7 +335,7 @@ class ShopifyInstanceFulfillmentConfiguration(models.Model):
 
     fulfillment_export_enabled = fields.Boolean(
         string="Export Fulfillments to Shopify",
-        default=True,
+        default=False,
         help=(
             "Create Shopify fulfillments when Odoo outgoing deliveries are "
             "completed. Disable this when Shopify or an external fulfillment "

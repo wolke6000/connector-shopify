@@ -63,6 +63,7 @@
                         <page string="Connection" name="connection">
                             <group>
                                 <group string="Shopify Admin API">
+                                    <field name="fulfillment_export_enabled" />
                                     <field
                                         name="shop_url"
                                         placeholder="example.myshopify.com"
@@ -119,6 +120,7 @@
                         <page string="Products" name="products">
                             <group>
                                 <group string="Import Behaviour">
+                                    <field name="product_export_enabled" />
                                     <field name="product_create_if_missing" />
                                     <field name="product_delete_behavior" />
                                     <field
