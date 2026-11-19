@@ -44,6 +44,7 @@ class ShopifyOrderFulfillmentExportPolicy(models.Model):
             return False
         return super()._job_push_picking_fulfillment(picking_id)
 
+
 class ShopifyFulfillmentOrderExportPolicy(models.Model):
     _inherit = "shopify.fulfillment.order"
 
