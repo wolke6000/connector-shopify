@@ -15,6 +15,7 @@ class TestShopifyFulfillmentSync(TransactionCase):
         cls.instance = cls.env["shopify.instance"].create(
             {
                 "name": "Fulfillment Shop",
+                "fulfillment_export_enabled": True,
                 "shop_url": "fulfillment-shop.myshopify.com",
                 "access_token": "test-token",
                 "webhook_secret": "test-secret",
@@ -97,6 +98,43 @@ class TestShopifyFulfillmentSync(TransactionCase):
 
     def test_fulfillment_export_enabled_by_default(self):
         self.assertTrue(self.instance.fulfillment_export_enabled)
+
+    def test_hold_release_is_blocked_at_action_and_job(self):
+        order = self.env["shopify.fulfillment.order"].create(
+            {
+                "instance_id": self.instance.id,
+                "order_binding_id": self.order_binding.id,
+                "shopify_id": "gid://shopify/FulfillmentOrder/992",
+                "is_held": True,
+            }
+        )
+        self.instance.fulfillment_export_enabled = False
+        with patch.object(type(self.instance), "_shopify_client") as client:
+            from odoo.exceptions import UserError
+
+            with self.assertRaises(UserError):
+                order.action_release_hold()
+            self.assertFalse(order._job_release_hold())
+        client.assert_not_called()
+
+    def test_manual_cancel_is_blocked_at_action_and_job(self):
+        fulfillment = self.env["shopify.fulfillment"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Fulfillment/993",
+                "order_binding_id": self.order_binding.id,
+                "origin": "odoo",
+            }
+        )
+        self.instance.fulfillment_export_enabled = False
+        with patch.object(type(self.instance), "_shopify_client") as client:
+            from odoo.exceptions import UserError
+
+            with self.assertRaises(UserError):
+                fulfillment.action_cancel_shopify()
+            self.assertFalse(fulfillment._job_cancel_shopify())
+            self.assertFalse(fulfillment._job_update_tracking())
+        client.assert_not_called()
 
     def test_picking_validation_skips_fulfillment_when_export_disabled(self):
         self.env["stock.quant"]._update_available_quantity(
