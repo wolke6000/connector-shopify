@@ -35,16 +35,6 @@ class ShopifyProductExportPolicy(models.Model):
         return super()._job_export_product(instance_id, template_id)
 
 
-class ShopifyProductExportWizardPolicy(models.TransientModel):
-    _inherit = "shopify.product.export.wizard"
-
-    def action_export(self):
-        self.ensure_one()
-        if not self.instance_id.product_export_enabled:
-            raise UserError(self.env._("Shopify product export is disabled."))
-        return super().action_export()
-
-
 class ShopifyOrderFulfillmentExportPolicy(models.Model):
     _inherit = "shopify.order"
 
