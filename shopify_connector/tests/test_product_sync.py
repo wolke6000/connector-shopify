@@ -14,6 +14,7 @@ class TestShopifyProductSync(TransactionCase):
         cls.instance = cls.env["shopify.instance"].create(
             {
                 "name": "Product Shop",
+                "product_export_enabled": True,
                 "shop_url": "product-shop.myshopify.com",
                 "access_token": "test-token",
                 "webhook_secret": "test-secret",
