@@ -54,6 +54,13 @@ class ShopifyOrderFulfillmentExportPolicy(models.Model):
             return False
         return super()._job_push_picking_fulfillment(picking_id)
 
+    def _push_picking_fulfillment(self, picking_id):
+        """Also guard the direct helper introduced by the OCA upstream."""
+        self.ensure_one()
+        if not self.instance_id.fulfillment_export_enabled:
+            return False
+        return super()._push_picking_fulfillment(picking_id)
+
     def _queue_missed_fulfillment_pushes(self):
         """Applies after the OCA upstream integration adds the retry queue."""
         self.ensure_one()
