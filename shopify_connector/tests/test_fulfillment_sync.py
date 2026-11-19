@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from ..lib.fulfillment import (
@@ -96,7 +97,7 @@ class TestShopifyFulfillmentSync(TransactionCase):
             }
         )
 
-    def test_fulfillment_export_enabled_by_default(self):
+    def test_explicitly_enabled_fulfillment_export(self):
         self.assertTrue(self.instance.fulfillment_export_enabled)
 
     def test_hold_release_is_blocked_at_action_and_job(self):
@@ -110,8 +111,6 @@ class TestShopifyFulfillmentSync(TransactionCase):
         )
         self.instance.fulfillment_export_enabled = False
         with patch.object(type(self.instance), "_shopify_client") as client:
-            from odoo.exceptions import UserError
-
             with self.assertRaises(UserError):
                 order.action_release_hold()
             self.assertFalse(order._job_release_hold())
