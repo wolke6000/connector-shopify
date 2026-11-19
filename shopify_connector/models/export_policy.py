@@ -44,21 +44,6 @@ class ShopifyOrderFulfillmentExportPolicy(models.Model):
             return False
         return super()._job_push_picking_fulfillment(picking_id)
 
-    def _push_picking_fulfillment(self, picking_id):
-        """Also guard the direct helper introduced by the OCA upstream."""
-        self.ensure_one()
-        if not self.instance_id.fulfillment_export_enabled:
-            return False
-        return super()._push_picking_fulfillment(picking_id)
-
-    def _queue_missed_fulfillment_pushes(self):
-        """Applies after the OCA upstream integration adds the retry queue."""
-        self.ensure_one()
-        if not self.instance_id.fulfillment_export_enabled:
-            return False
-        return super()._queue_missed_fulfillment_pushes()
-
-
 class ShopifyFulfillmentOrderExportPolicy(models.Model):
     _inherit = "shopify.fulfillment.order"
 
@@ -87,23 +72,3 @@ class ShopifyFulfillmentExportPolicy(models.Model):
         if not self.instance_id.fulfillment_export_enabled:
             return False
         return super()._job_cancel_shopify()
-
-    def _job_update_tracking(self):
-        """Applies after the OCA upstream integration adds tracking updates."""
-        self.ensure_one()
-        if not self.instance_id.fulfillment_export_enabled:
-            return False
-        return super()._job_update_tracking()
-
-
-class StockPickingFulfillmentExportPolicy(models.Model):
-    _inherit = "stock.picking"
-
-    def _queue_shopify_tracking_update(self):
-        """Applies after the OCA upstream integration adds tracking updates."""
-        # Avoid writing back tracking for Shopify-authoritative fulfillments.
-        if not self.sudo().shopify_fulfillment_ids.filtered(
-            lambda item: item.instance_id.fulfillment_export_enabled
-        ):
-            return False
-        return super()._queue_shopify_tracking_update()

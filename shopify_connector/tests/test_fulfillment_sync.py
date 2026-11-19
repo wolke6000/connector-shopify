@@ -130,8 +130,57 @@ class TestShopifyFulfillmentSync(TransactionCase):
             with self.assertRaises(UserError):
                 fulfillment.action_cancel_shopify()
             self.assertFalse(fulfillment._job_cancel_shopify())
-            self.assertFalse(fulfillment._job_update_tracking())
         client.assert_not_called()
+
+    def test_picking_completion_queues_only_enabled_instance(self):
+        disabled_instance = self.env["shopify.instance"].create(
+            {
+                "name": "Other fulfillment shop",
+                "shop_url": "other-fulfillment-shop.myshopify.com",
+                "access_token": "other-test-token",
+                "webhook_secret": "other-test-secret",
+            }
+        )
+        self.assertFalse(disabled_instance.fulfillment_export_enabled)
+        self.env["shopify.order"].create(
+            {
+                "instance_id": disabled_instance.id,
+                "shopify_id": "gid://shopify/Order/991",
+                "odoo_id": self.sale.id,
+                "order_name": "#991",
+                "state": "synced",
+            }
+        )
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+
+        with (
+            patch.object(
+                type(self.order_binding), "with_delay", return_value=self.order_binding
+            ) as delayed,
+            patch.object(
+                type(self.order_binding),
+                "_job_push_picking_fulfillment",
+                return_value=True,
+            ) as push,
+        ):
+            picking.button_validate()
+
+        self.assertEqual(picking.state, "done")
+        delayed.assert_called_once()
+        self.assertEqual(
+            delayed.call_args.kwargs["identity_key"],
+            (
+                f"shopify.fulfillment.push.{self.instance.id}."
+                f"{self.order_binding.id}.{picking.id}"
+            ),
+        )
+        push.assert_called_once_with(picking.id)
 
     def test_picking_validation_skips_fulfillment_when_export_disabled(self):
         self.env["stock.quant"]._update_available_quantity(
