@@ -64,6 +64,8 @@ class ShopifyInstance(models.Model):
         string="Product Field Ownership",
         copy=True,
     )
+    # SW-OCA-004: fail-closed product/price/media write opt-in.
+    # See docs/OCA-DEVIATIONS.md; inventory exports remain independent.
     product_export_enabled = fields.Boolean(
         string="Export Products to Shopify",
         default=False,
