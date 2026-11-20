@@ -889,7 +889,7 @@ class ShopifyOrderSync(models.Model):
             line_binding = existing.get(line_data["id"])
             if line_data["quantity"] <= 0:
                 if line_binding:
-                    line_binding.odoo_id.unlink()
+                    self._remove_line(sale_order, line_binding)
                 continue
             product = self._line_product(instance, line_data)
             taxes = self._mapped_taxes(
@@ -953,10 +953,21 @@ class ShopifyOrderSync(models.Model):
             line_binding.write(self._line_binding_values(line_data))
         for identifier, line_binding in existing.items():
             if identifier not in incoming_ids and not line_binding.is_shipping:
-                line_binding.odoo_id.unlink()
+                self._remove_line(sale_order, line_binding)
         self._apply_shipping_lines(binding, sale_order, instance, order_data, country)
         self._apply_duties_line(sale_order, instance, order_data)
         self._apply_subtotal_adjustment(binding, sale_order, instance, order_data)
+
+    def _remove_line(self, sale_order, line_binding):
+        """Remove a line that Shopify refunded in full or no longer sends."""
+        if sale_order.state in ("draft", "sent"):
+            line_binding.odoo_id.unlink()
+            return
+        # Odoo does not delete a line of a confirmed order. Set its quantity
+        # to 0 instead, as Odoo asks, and keep the binding for later imports.
+        line_binding.odoo_id.with_context(shopify_order_import=True).write(
+            {"product_uom_qty": 0}
+        )
 
     def _line_binding_values(self, line_data):
         allocations = line_data["discount_allocations"]
@@ -1066,7 +1077,27 @@ class ShopifyOrderSync(models.Model):
                 )
         for identifier, line_binding in existing.items():
             if identifier not in incoming_ids:
-                line_binding.odoo_id.unlink()
+                self._remove_auxiliary_lines(sale_order, line_binding.odoo_id)
+
+    def _remove_auxiliary_lines(self, sale_order, lines):
+        """Retain zero-quantity auxiliary lines on confirmed sales orders."""
+        if not lines:
+            return
+        if sale_order.state in ("draft", "sent"):
+            lines.unlink()
+        elif sale_order.state in ("sale", "done"):
+            lines.with_context(shopify_order_import=True).write(
+                {"product_uom_qty": 0, "shopify_expected_total": "0"}
+            )
+        else:
+            # Do not silently alter auxiliary lines on cancelled orders.
+            raise ShopifyOrderImportError(
+                self.env._(
+                    "Cannot adjust lines of order %(order)s in state %(state)s.",
+                    order=sale_order.name,
+                    state=sale_order.state,
+                )
+            )
 
     def _apply_duties_line(self, sale_order, instance, order_data):
         instance._ensure_duties_product()
@@ -1082,7 +1113,7 @@ class ShopifyOrderSync(models.Model):
         # Shopify has no duties for this order:
         # remove a previously imported duty line if one exists.
         if not amount:
-            existing.unlink()
+            self._remove_auxiliary_lines(sale_order, existing)
             return
 
         values = {
@@ -1103,7 +1134,7 @@ class ShopifyOrderSync(models.Model):
             line.with_context(shopify_order_import=True).write(values)
 
             # Defensive cleanup if an earlier bug created duplicates.
-            (existing - line).unlink()
+            self._remove_auxiliary_lines(sale_order, existing - line)
         else:
             (
                 self.env["sale.order.line"]
@@ -1149,7 +1180,7 @@ class ShopifyOrderSync(models.Model):
         actual_tax = Decimal(str(sale_order.amount_tax))
 
         if abs(actual_tax - expected_tax) >= tolerance:
-            existing.unlink()
+            self._remove_auxiliary_lines(sale_order, existing)
             return
 
         # ------------------------------------------------------------
@@ -1218,12 +1249,12 @@ class ShopifyOrderSync(models.Model):
         # ------------------------------------------------------------
 
         if abs(subtotal_difference - total_difference) >= tolerance:
-            existing.unlink()
+            self._remove_auxiliary_lines(sale_order, existing)
             return
 
         # Nothing to reconcile.
         if abs(subtotal_difference) < tolerance:
-            existing.unlink()
+            self._remove_auxiliary_lines(sale_order, existing)
             return
 
         # ------------------------------------------------------------
@@ -1244,7 +1275,7 @@ class ShopifyOrderSync(models.Model):
         max_adjustment = rounding * Decimal(str(allowed_units))
 
         if abs(subtotal_difference) > max_adjustment:
-            existing.unlink()
+            self._remove_auxiliary_lines(sale_order, existing)
             return
 
         # ------------------------------------------------------------
@@ -1274,7 +1305,7 @@ class ShopifyOrderSync(models.Model):
 
             line.with_context(shopify_order_import=True).write(values)
 
-            (existing - line).unlink()
+            self._remove_auxiliary_lines(sale_order, existing - line)
 
         else:
             (

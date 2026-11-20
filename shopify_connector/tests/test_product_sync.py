@@ -1,7 +1,7 @@
 import base64
 from unittest.mock import Mock, patch
 
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
 from ..lib.product import merge_owned_fields
@@ -21,6 +21,131 @@ class TestShopifyProductSync(TransactionCase):
             }
         )
         cls.instance.state = "connected"
+
+    def test_new_instance_disables_product_export(self):
+        instance = self.env["shopify.instance"].create(
+            {
+                "name": "Read-only products",
+                "shop_url": "readonly-products.myshopify.com",
+                "access_token": "test-token",
+                "webhook_secret": "test-secret",
+            }
+        )
+        self.assertFalse(instance.product_export_enabled)
+
+    def test_disabled_product_export_blocks_queue_and_old_job(self):
+        product = self.env["product.product"].create(
+            {
+                "name": "No export product",
+                "company_id": self.instance.company_id.id,
+            }
+        )
+        self.instance.product_export_enabled = False
+        export_model = self.env["shopify.product.template"]
+        with patch.object(type(export_model), "with_delay") as delayed:
+            self.assertFalse(
+                export_model._enqueue_product_export(
+                    self.instance, product.product_tmpl_id
+                )
+            )
+        delayed.assert_not_called()
+        with patch.object(type(self.instance), "_shopify_client") as client:
+            self.assertFalse(
+                export_model._job_export_product(
+                    self.instance.id, product.product_tmpl_id.id
+                )
+            )
+        client.assert_not_called()
+
+    def test_manual_product_export_disabled_before_queue(self):
+        product = self.env["product.product"].create(
+            {
+                "name": "Wizard blocked product",
+                "company_id": self.instance.company_id.id,
+            }
+        )
+        wizard = self.env["shopify.product.export.wizard"].create(
+            {
+                "instance_id": self.instance.id,
+                "product_tmpl_ids": [(6, 0, product.product_tmpl_id.ids)],
+            }
+        )
+        self.instance.product_export_enabled = False
+        with patch.object(
+            type(self.env["shopify.product.template"]), "with_delay"
+        ) as delayed:
+            with self.assertRaises(UserError):
+                wizard.action_export()
+        delayed.assert_not_called()
+
+    def test_product_change_triggers_respect_disabled_export(self):
+        product = self.env["product.product"].create(
+            {
+                "name": "Bound no export product",
+                "company_id": self.instance.company_id.id,
+            }
+        )
+        binding = self.env["shopify.product.template"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Product/9001",
+                "odoo_id": product.product_tmpl_id.id,
+                "status": "ACTIVE",
+                "state": "synced",
+            }
+        )
+        self.env["shopify.product.variant"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/ProductVariant/9002",
+                "template_binding_id": binding.id,
+                "odoo_id": product.id,
+                "state": "synced",
+            }
+        )
+        self.instance.product_export_enabled = False
+        export_class = type(self.env["shopify.product.template"])
+        original = export_class._enqueue_product_export
+        reached = []
+
+        def trace_enqueue(recordset, instance, template):
+            reached.append((instance.id, template.id))
+            return original(recordset, instance, template)
+
+        def check_trigger(action):
+            previous = len(reached)
+            action()
+            self.assertGreater(len(reached), previous)
+            self.assertEqual(reached[-1], (self.instance.id, product.product_tmpl_id.id))
+
+        with (
+            patch.object(export_class, "_enqueue_product_export", trace_enqueue),
+            patch.object(export_class, "with_delay") as delayed,
+        ):
+            check_trigger(
+                lambda: product.product_tmpl_id.write({"name": "Changed product"})
+            )
+            check_trigger(lambda: product.write({"default_code": "NO-EXPORT"}))
+            check_trigger(
+                lambda: self.env["product.pricelist.item"].create(
+                    {
+                        "pricelist_id": self.instance.product_pricelist_id.id,
+                        "compute_price": "fixed",
+                        "fixed_price": 19,
+                        "applied_on": "0_product_variant",
+                        "product_id": product.id,
+                    }
+                )
+            )
+            check_trigger(
+                lambda: self.env["product.image"].create(
+                    {
+                        "name": "No media upload",
+                        "product_tmpl_id": product.product_tmpl_id.id,
+                    }
+                )
+            )
+        delayed.assert_not_called()
 
     def test_matching_prefers_barcode_before_sku(self):
         barcode_product = self.env["product.product"].create(
