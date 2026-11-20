@@ -66,6 +66,14 @@ jobs:
             cat merge-review/conflicted-paths.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          echo "Dry-run semantic candidate resolution:"
+          python scripts/resolve_oca_merge_candidate.py
+          python -m compileall -q shopify_connector shopify_connector_account \
+            shopify_connector_pos shopify_connector_website_sale
+          git add -u
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --stat > merge-review/semantic-candidate-stat.txt
+          git status --short > merge-review/semantic-candidate-status.txt
           git merge --abort 2>/dev/null || true
 
       - name: Upload conflict review (public source only)
