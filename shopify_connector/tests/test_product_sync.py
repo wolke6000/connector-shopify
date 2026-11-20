@@ -116,7 +116,9 @@ class TestShopifyProductSync(TransactionCase):
             previous = len(reached)
             action()
             self.assertGreater(len(reached), previous)
-            self.assertEqual(reached[-1], (self.instance.id, product.product_tmpl_id.id))
+            self.assertEqual(
+                reached[-1], (self.instance.id, product.product_tmpl_id.id)
+            )
 
         with (
             patch.object(export_class, "_enqueue_product_export", trace_enqueue),
