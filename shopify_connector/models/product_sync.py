@@ -1122,6 +1122,8 @@ class ShopifyProductTemplateSync(models.Model):
         return self._job_import_product(instance_id, payload)
 
     @api.model
+    # SW-OCA-004: reject auto/manual enqueue when product writes are disabled.
+    # See docs/OCA-DEVIATIONS.md.
     def _enqueue_product_export(self, instance, template):
         if not instance.active or not instance.product_export_enabled:
             return False
@@ -1139,6 +1141,8 @@ class ShopifyProductTemplateSync(models.Model):
         )._job_export_product(instance.id, template.id)
 
     @api.model
+    # SW-OCA-004: guard execution too, including jobs queued before disable.
+    # See docs/OCA-DEVIATIONS.md.
     def _job_export_product(self, instance_id, template_id):
         self = self.sudo()
         instance = self.env["shopify.instance"].browse(instance_id).exists()
