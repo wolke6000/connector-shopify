@@ -147,6 +147,24 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         payload.update(values)
         return payload
 
+    def _cancelled_payload(self, order_id, **values):
+        """Return the Shopify payload after cancellation.
+
+        Shopify retains ordered quantities but zeroes the current
+        quantity and totals of each line.
+        """
+        payload = self._payload(
+            order_id=order_id,
+            total="0.00",
+            cancelledAt="2026-01-12T10:00:00Z",
+            updatedAt="2026-01-12T10:00:00Z",
+            **values,
+        )
+        for line in payload["lineItems"]["nodes"]:
+            line["currentQuantity"] = 0
+            line["refundableQuantity"] = 0
+        return payload
+
     def test_cutover_blocks_unbound_old_order_even_when_updated_recently(self):
         self.instance.order_import_date_from = "2026-02-01"
         before = self.order_model.search_count([])
@@ -465,6 +483,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                 "type": "delivery",
                 "name": "anna de vries",
                 "street": " LEVERINGSWEG 2 ",
+                "phone": "+31612345678",
                 "city": "Veendam",
                 "zip": "9641 AA",
                 "country_id": netherlands.id,
