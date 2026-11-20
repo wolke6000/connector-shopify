@@ -167,6 +167,7 @@ class ShopifyOrderFulfillmentSync(models.Model):
                     f"shopify.fulfillment.import.{self.instance_id.id}.{fulfillment_id}"
                 ),
             )._job_import_from_shopify(self.instance_id.id, fulfillment_id)
+
     def _upsert_fulfillment_order(self, payload):
         fulfillment_order_id = str(payload.get("id") or "")
         if not fulfillment_order_id:
