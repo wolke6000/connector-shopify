@@ -609,9 +609,10 @@ class TestShopifyInboundFulfillment(TransactionCase):
         }
         client = MagicMock()
         client.execute.return_value = {"fulfillment": None}
-        with patch.object(
-            type(self.instance), "_shopify_client", return_value=client
-        ), trap_jobs() as trap:
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            trap_jobs() as trap,
+        ):
             result = self.env["shopify.fulfillment"]._job_import_from_shopify(
                 self.instance.id, "gid://shopify/Fulfillment/961", webhook
             )
@@ -641,9 +642,10 @@ class TestShopifyInboundFulfillment(TransactionCase):
         }
         client = MagicMock()
         client.execute.return_value = {"fulfillment": None}
-        with patch.object(
-            type(self.instance), "_shopify_client", return_value=client
-        ), trap_jobs() as trap:
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            trap_jobs() as trap,
+        ):
             self.env["shopify.fulfillment"]._job_import_from_shopify(
                 self.instance.id, "gid://shopify/Fulfillment/962", webhook
             )
@@ -655,9 +657,7 @@ class TestShopifyInboundFulfillment(TransactionCase):
         self._stock(self.gadget, 2)
         self.sale.action_confirm()
         picking = self.sale.picking_ids
-        payload = self._payload(
-            963, [(self.widget_line, 2), (self.gadget_line, 2)]
-        )
+        payload = self._payload(963, [(self.widget_line, 2), (self.gadget_line, 2)])
         payload["fulfillmentLineItems"]["nodes"].append(
             {
                 "quantity": 1,
