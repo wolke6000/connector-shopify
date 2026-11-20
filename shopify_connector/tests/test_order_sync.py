@@ -155,6 +155,49 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertEqual(self.order_model.search_count([]), before)
 
+    def test_cutover_blocks_reimport_of_deleted_historical_binding(self):
+        # SW-OCA-001: simulate the verified one-off cleanup and a late webhook.
+        old_payload = self._payload(order_id=907)
+        binding_id = self.order_model._job_import_order(
+            self.instance.id, old_payload
+        )
+        binding = self.order_model.browse(binding_id)
+        sale_order = binding.odoo_id
+        self.assertTrue(sale_order)
+        sale_order_id = sale_order.id
+
+        # The production cleanup removed both technical bindings and sale orders.
+        binding.unlink()
+        sale_order.unlink()
+        self.assertFalse(self.order_model.browse(binding_id).exists())
+        self.assertFalse(self.env["sale.order"].browse(sale_order_id).exists())
+
+        self.instance.order_import_date_from = "2026-11-07"
+        updated_payload = self._payload(
+            order_id=907, updatedAt="2026-11-19T18:26:00Z"
+        )
+        client = Mock()
+        client.execute.return_value = {"order": updated_payload}
+        with patch.object(
+            type(self.instance), "_shopify_client", return_value=client
+        ):
+            self.assertFalse(
+                self.order_model._job_import_order_from_api(self.instance.id, 907)
+            )
+
+        client.execute.assert_called_once_with(
+            ORDER_BY_ID_QUERY, {"id": "gid://shopify/Order/907"}
+        )
+        self.assertFalse(
+            self.order_model.search(
+                [
+                    ("instance_id", "=", self.instance.id),
+                    ("shopify_id", "=", "gid://shopify/Order/907"),
+                ]
+            )
+        )
+        self.assertFalse(self.env["sale.order"].browse(sale_order_id).exists())
+
     def test_cutover_allows_updates_of_synced_old_orders(self):
         binding_id = self.order_model._job_import_order(
             self.instance.id, self._payload(order_id=902)
