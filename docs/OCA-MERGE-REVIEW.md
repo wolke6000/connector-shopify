@@ -125,7 +125,20 @@ The upstream test method inventory was rechecked against OCA `5454e91b`:
   `test_order_drift_search_converts_to_utc`.
   Switchology has separate durable pending-ledger tests whose behavior is
   not interchangeable with old upstream cursor advancement semantics.
-  **Review behavioral equivalence/extra coverage**, not exact test names.
+  Additional dedicated tests in `test_order_sync.py` cover (a) default
+  two-day first-run window plus one-hour overlap, (b) cron enqueuing of the
+  reconciliation job, and (c) conversion of a timezone-aware search timestamp
+  to UTC. Odoo/OCB passed these on `0e1e313d` (run `44825434398`).
+  An updated-order drift test already verifies pagination and date advancement;
+  tests also cover skipping current bindings, API failures and durable
+  re-enqueuing of unacknowledged updates.
+
+  The remaining **semantic** review point is the intentional absence of
+  periodic *draft*-order reconciliation: fork bulk import can explicitly
+  queue drafts, but the drift scanner only follows regular orders. Confirm
+  with the business owner whether this remains desired before closing
+  SW-OCA-003. Do **not** restore old OCA cursor semantics merely to match
+  method names.
 
 Remaining tests are not evidence of complete live write safety or successful
 upgrade on an existing database. Source and test integration are separate
