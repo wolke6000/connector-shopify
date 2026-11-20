@@ -1079,16 +1079,24 @@ class ShopifyOrderSync(models.Model):
             if identifier not in incoming_ids:
                 self._remove_auxiliary_lines(sale_order, line_binding.odoo_id)
 
-    @staticmethod
-    def _remove_auxiliary_lines(sale_order, lines):
+    def _remove_auxiliary_lines(self, sale_order, lines):
         """Retain zero-quantity auxiliary lines on confirmed sales orders."""
         if not lines:
             return
         if sale_order.state in ("draft", "sent"):
             lines.unlink()
-        else:
+        elif sale_order.state in ("sale", "done"):
             lines.with_context(shopify_order_import=True).write(
                 {"product_uom_qty": 0, "shopify_expected_total": "0"}
+            )
+        else:
+            # Do not silently alter auxiliary lines on cancelled orders.
+            raise ShopifyOrderImportError(
+                self.env._(
+                    "Cannot adjust auxiliary lines of order %(order)s in state %(state)s.",
+                    order=sale_order.name,
+                    state=sale_order.state,
+                )
             )
 
     def _apply_duties_line(self, sale_order, instance, order_data):
