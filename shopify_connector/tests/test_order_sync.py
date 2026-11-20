@@ -537,6 +537,28 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertAlmostEqual(adjustment.price_unit, 0.01, places=2)
         self.assertFalse(adjustment.tax_ids)
 
+    def test_no_discount_multi_unit_price_mismatch_is_not_rounding(self):
+        # SW-OCA-009: never hide an actual two-cent price difference merely
+        # because an order contains several units and no discount.
+        payload = self._payload(order_id=910, quantity=2, total="20.02")
+        for field in ("currentSubtotalPriceSet", "currentTotalPriceSet"):
+            payload[field] = self._bag("20.02")
+
+        before = self.env["sale.order"].search_count([])
+        result = self.order_model._job_import_order(self.instance.id, payload)
+
+        binding = self.order_model.search(
+            [
+                ("instance_id", "=", self.instance.id),
+                ("shopify_id", "=", "gid://shopify/Order/910"),
+            ]
+        )
+        self.assertFalse(result)
+        self.assertEqual(binding.state, "error")
+        self.assertIn("Order total mismatch", binding.error_message)
+        self.assertFalse(binding.odoo_id)
+        self.assertEqual(self.env["sale.order"].search_count([]), before)
+
     def test_confirmed_order_removes_and_restores_duty_line(self):
         self.instance.order_confirmation_policy = "auto"
         first = self._payload(
