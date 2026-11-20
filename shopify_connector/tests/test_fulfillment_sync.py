@@ -165,6 +165,57 @@ class TestShopifyFulfillmentSync(TransactionCase):
         delayed.assert_not_called()
         client.assert_not_called()
 
+    def test_missed_fulfillment_is_not_requeued_after_export_disabled(self):
+        # SW-OCA-005: newly added upstream recovery may not bypass the opt-out.
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+        self.instance.fulfillment_export_enabled = False
+        picking.button_validate()
+        self.assertEqual(picking.state, "done")
+        picking.sudo().shopify_push_pending = True
+
+        with patch.object(type(self.order_binding), "with_delay") as delayed:
+            self.order_binding._queue_missed_fulfillment_pushes()
+
+        delayed.assert_not_called()
+        self.assertTrue(picking.shopify_push_pending)
+
+    def test_disabled_export_blocks_tracking_queue_and_queued_update(self):
+        # SW-OCA-005: tracking changes are Shopify mutations as well.
+        self.env["stock.quant"]._update_available_quantity(
+            self.product, self.warehouse.lot_stock_id, 1
+        )
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        picking.action_assign()
+        picking.move_ids.quantity = 1
+        self.instance.fulfillment_export_enabled = False
+        picking.button_validate()
+        self.assertEqual(picking.state, "done")
+        fulfillment = self.env["shopify.fulfillment"].create(
+            {
+                "instance_id": self.instance.id,
+                "order_binding_id": self.order_binding.id,
+                "picking_id": picking.id,
+                "shopify_id": "gid://shopify/Fulfillment/995",
+                "origin": "odoo",
+            }
+        )
+        with (
+            patch.object(type(fulfillment), "with_delay") as delayed,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            picking.write({"carrier_tracking_ref": "TRACK-995"})
+            self.assertFalse(fulfillment._job_update_tracking())
+
+        delayed.assert_not_called()
+        client.assert_not_called()
+
     def test_picking_validation_skips_fulfillment_when_export_disabled(self):
         self.env["stock.quant"]._update_available_quantity(
             self.product, self.warehouse.lot_stock_id, 1
