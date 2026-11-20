@@ -55,6 +55,10 @@ class ShopifyProductTemplate(models.Model):
             image_binding = self.env["shopify.product.image"].search(
                 [
                     ("instance_id", "=", template_binding.instance_id.id),
+                    # SW-OCA-012: the same media GID can occur on different
+                    # products. Scope image bindings to this product; see
+                    # docs/OCA-DEVIATIONS.md.
+                    ("template_binding_id", "=", template_binding.id),
                     ("shopify_id", "=", payload["id"]),
                 ],
                 limit=1,
