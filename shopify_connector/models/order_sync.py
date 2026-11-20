@@ -1524,7 +1524,12 @@ class ShopifyOrderSync(models.Model):
 
         item_count = sum(max(0, int(line["quantity"])) for line in order_data["lines"])
 
-        allowed_units = min(max(item_count, 1), 50)
+        # SW-OCA-009: a quantity-dependent tolerance without any discount
+        # could mask a real price mismatch (e.g. 2 x 10.00 vs 20.02).
+        # Keep the existing one-minor-unit legacy allowance, but only
+        # permit per-unit accumulation when a product line has a discount.
+        has_discount = any(line.discount for line in product_lines)
+        allowed_units = min(max(item_count, 1), 50) if has_discount else 1
         max_adjustment = rounding * Decimal(str(allowed_units))
 
         if abs(subtotal_difference) > max_adjustment:
