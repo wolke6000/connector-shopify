@@ -102,28 +102,34 @@ The **five fork-only paths** also need follow-up after importing OCA:
 `field_mapping.py` and product wizard guards may call APIs whose contracts changed;
 views must load in an Odoo 19 registry with the new module layout.
 
-## Upstream regression coverage gap (unverified)
+## Upstream regression coverage (2026-11-20)
 
-An AST-level method inventory against upstream OCA `5454e91b` found that
-`test_fulfillment_sync.py`, `test_fulfillment_inbound.py` and
-`test_product_sync.py` retain all upstream test method names after the
-source merge. **This is not proof of test correctness or execution.**
+The upstream test method inventory was rechecked against OCA `5454e91b`:
 
-`test_order_sync.py` is **missing 18 upstream test/helper method names**,
-including helpers `_cancelled_payload`, `_delivered`,
-`_refunded_before_invoice_payload`, `_updated_orders_page`,
-and tests for fixed draft discounts, cancellations after delivery, refunds
-before invoicing, and drift cursor/search behavior.
+- `test_fulfillment_sync.py`, `test_fulfillment_inbound.py` and
+  `test_product_sync.py` retain the upstream test method names.
+- Nine previously omitted upstream order methods were restored in
+  `test_order_sync.py`: fixed-unit discounts, refunds before invoicing
+  (including partial/full/shipping), and delivered-order handled refunds
+  and cancellations (plus their helpers).
+- Odoo and OCB **passed** for restored methods at commit `52808357`:
+  [GitHub Actions run 44824685850](https://github.com/wolke6000/connector-shopify/actions/runs/44824685850).
+- Eight upstream order test/helper method names remain intentionally **not**
+  copied verbatim: `_updated_orders_page`,
+  `test_order_drift_imports_orders_updated_since_the_last_run`,
+  `test_order_drift_skips_orders_already_imported_in_that_version`,
+  `test_order_drift_starts_two_days_back_on_its_first_run`,
+  `test_order_drift_keeps_its_date_when_shopify_fails`,
+  `test_order_drift_also_imports_updated_draft_orders`,
+  `test_order_drift_cron_queues_the_updated_orders_sync`, and
+  `test_order_drift_search_converts_to_utc`.
+  Switchology has separate durable pending-ledger tests whose behavior is
+  not interchangeable with old upstream cursor advancement semantics.
+  **Review behavioral equivalence/extra coverage**, not exact test names.
 
-Do not mechanically append the old drift tests: SW-OCA-003 intentionally
-uses a durable pending ledger with different acknowledgment semantics.
-Before marking this PR ready, restore equivalent regression coverage for
-OCA order/refund/discount behavior and adapt drift tests to the ledger.
-Preserve existing Switchology tests for cleanup replay, auto-confirm cutoff,
-confirmed-order auxiliary lines and incomplete addresses.
-
-**Gate: OPEN.** An AST inventory checks function names only; it does not
-substitute for Odoo-/OCB-level execution.
+Remaining tests are not evidence of complete live write safety or successful
+upgrade on an existing database. Source and test integration are separate
+from the post-cleanup clone upgrade gate.
 
 ## Required no-mutation guarantees
 
@@ -172,7 +178,8 @@ outbound guard in code and test it **before creating a merge commit**.
 ### Verification evidence and remaining gates
 
 - The integration branch has policy comments and `docs/OCA-DEVIATIONS.md`.
-- The branch now includes `test_cutover_blocks_reimport_of_deleted_historical_binding`;
-  it has **not** been exercised against an Odoo runtime in this task.
+- The branch includes `test_cutover_blocks_reimport_of_deleted_historical_binding`
+  and restored OCA order regressions. Odoo/OCB fresh-install CI passed at
+  `52808357` (run `44824685850`). This is not the clone-upgrade test.
 - OCA source merge commit `a6293a19` is confirmed. A live or isolated
   Odoo module upgrade **has not** been performed; no production change is authorized.
