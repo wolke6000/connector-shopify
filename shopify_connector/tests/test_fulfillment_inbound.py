@@ -560,7 +560,6 @@ class TestShopifyInboundFulfillment(TransactionCase):
         self.assertEqual(self.order_binding.fulfillment_ids.picking_id, picking)
 
     def test_historical_draft_requires_manual_confirmation(self):
-        from odoo import fields
         from datetime import datetime
 
         self._stock(self.widget, 2)
