@@ -25,6 +25,9 @@ from ..lib.payout import (
     plan_payout_entry,
 )
 
+# Shopify Payments can be activated after the connector found it unavailable.
+PAYMENTS_RECHECK_INTERVAL = timedelta(days=7)
+
 OPEN_DISPUTE_STATES = {
     "NEEDS_RESPONSE",
     "UNDER_REVIEW",
@@ -63,11 +66,16 @@ class ShopifyInstancePayoutSync(models.Model):
         today = fields.Date.context_today(self)
         date_from = fields.Date.to_string(today - timedelta(days=7))
         date_to = fields.Date.to_string(today)
+        recheck_before = fields.Datetime.now() - PAYMENTS_RECHECK_INTERVAL
         for instance in self.search(
             [
                 ("active", "=", True),
                 ("state", "=", "connected"),
+                "|",
                 ("shopify_payments_state", "!=", "unavailable"),
+                "|",
+                ("shopify_payments_checked_at", "=", False),
+                ("shopify_payments_checked_at", "<", recheck_before),
             ]
         ):
             instance.with_delay(
@@ -85,6 +93,14 @@ class ShopifyInstancePayoutSync(models.Model):
                 ),
                 record=instance,
             )
+
+    def _set_shopify_payments_state(self, state):
+        self.write(
+            {
+                "shopify_payments_state": state,
+                "shopify_payments_checked_at": fields.Datetime.now(),
+            }
+        )
 
     def _payments_page(self, query, variables, connection):
         self.ensure_one()
@@ -118,7 +134,7 @@ class ShopifyInstancePayoutSync(models.Model):
                 "payouts",
             )
         except ShopifyUserError as exc:
-            self.shopify_payments_state = "unavailable"
+            self._set_shopify_payments_state("unavailable")
             self._write_log(
                 entity="payout",
                 direction="import",
@@ -128,7 +144,7 @@ class ShopifyInstancePayoutSync(models.Model):
             )
             return []
         if not account or not account.get("activated"):
-            self.shopify_payments_state = "unavailable"
+            self._set_shopify_payments_state("unavailable")
             self._write_log(
                 entity="payout",
                 direction="import",
@@ -137,7 +153,7 @@ class ShopifyInstancePayoutSync(models.Model):
                 record=self,
             )
             return []
-        self.shopify_payments_state = "enabled"
+        self._set_shopify_payments_state("enabled")
         imported = self.env["shopify.payout"]
         for payload in payloads:
             payout = self._upsert_payout(normalize_payout(payload))
@@ -209,6 +225,11 @@ class ShopifyInstancePayoutSync(models.Model):
             limit=1,
         )
         if payout:
+            if payout.state == "error":
+                # Import failures raise; a payout in error failed to generate
+                # or keep its journal entry, which a fresh import does not fix.
+                values.pop("state")
+                values.pop("error_message")
             payout.write(values)
         else:
             payout = self.env["shopify.payout"].create(values)
@@ -226,16 +247,78 @@ class ShopifyInstancePayoutSync(models.Model):
         )
         if not account:
             return
+        transactions = [
+            normalized
+            for normalized in map(normalize_transaction, payloads)
+            if not normalized["payout_id"]
+            or normalized["payout_id"] == payout.shopify_id
+        ]
+        if payout.entry_id.state == "posted":
+            # The posted entry was built from the stored transactions: keep
+            # them as its audit trail and report any change Shopify made.
+            self._check_posted_payout_transactions(payout, transactions)
+            return
         seen = set()
-        for payload in payloads:
-            normalized = normalize_transaction(payload)
-            if normalized["payout_id"] and normalized["payout_id"] != payout.shopify_id:
-                continue
+        for normalized in transactions:
             transaction = self._upsert_payout_transaction(payout, normalized)
             seen.add(transaction.shopify_id)
         payout.transaction_ids.filtered(
             lambda item: item.shopify_id not in seen
         ).unlink()
+
+    def _check_posted_payout_transactions(self, payout, transactions):
+        def amounts(currency, amount, fee, net):
+            return (currency, Decimal(amount), Decimal(fee), Decimal(net))
+
+        stored = {
+            transaction.shopify_id: amounts(
+                transaction.currency_id.name,
+                transaction.amount_exact,
+                transaction.fee_exact,
+                transaction.net_exact,
+            )
+            for transaction in payout.transaction_ids
+        }
+        incoming = {
+            normalized["id"]: amounts(
+                normalized["currency"],
+                normalized["amount"],
+                normalized["fee"],
+                normalized["net"],
+            )
+            for normalized in transactions
+        }
+        if stored == incoming:
+            return
+        added = len(incoming.keys() - stored.keys())
+        removed = len(stored.keys() - incoming.keys())
+        changed = sum(
+            1
+            for transaction_id in stored.keys() & incoming.keys()
+            if stored[transaction_id] != incoming[transaction_id]
+        )
+        message = self.env._(
+            "Shopify changed the transactions of payout %(payout)s after its "
+            "journal entry %(entry)s was posted: %(added)s added, %(removed)s "
+            "removed, %(changed)s changed. Reset the entry to draft so the next "
+            "import refreshes the transactions, then generate it again.",
+            payout=payout.reference,
+            entry=payout.entry_id.display_name,
+            added=added,
+            removed=removed,
+            changed=changed,
+        )
+        if payout.state == "error" and payout.error_message == message:
+            # Already flagged: the daily import must not log it again.
+            return
+        payout.write({"state": "error", "error_message": message})
+        self._write_log(
+            entity="payout",
+            direction="import",
+            level="error",
+            message=message,
+            record=payout,
+        )
 
     def _gift_card_liability_account(self):
         self.ensure_one()
@@ -382,6 +465,22 @@ class ShopifyInstancePayoutSync(models.Model):
         return transaction
 
     def _import_disputes(self, date_from=False, date_to=False):
+        # A dispute stays open for weeks. Reach back to the oldest open one,
+        # so that its outcome is imported too.
+        oldest_open = self.env["shopify.dispute"].search(
+            [
+                ("instance_id", "=", self.id),
+                ("dispute_status", "in", list(OPEN_DISPUTE_STATES)),
+                ("initiated_at", "!=", False),
+            ],
+            order="initiated_at",
+            limit=1,
+        )
+        if date_from and oldest_open:
+            # Shopify can read the date in the shop's time zone, which can be
+            # a day before the UTC day. Start one day earlier to include it.
+            reach_back = oldest_open.initiated_at.date() - timedelta(days=1)
+            date_from = min(str(date_from)[:10], fields.Date.to_string(reach_back))
         account, payloads = self._payments_page(
             SHOPIFY_PAYMENTS_DISPUTES_QUERY,
             {"query": _date_query("initiated_at", date_from, date_to)},

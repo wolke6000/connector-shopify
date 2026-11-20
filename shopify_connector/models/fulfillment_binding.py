@@ -294,6 +294,13 @@ class ShopifyCarrierMapping(models.Model):
         required=True,
         help="Company string sent in Shopify tracking information.",
     )
+    shipping_method_names = fields.Char(
+        string="Shopify Shipping Methods",
+        help="Names of the Shopify shipping methods that this carrier delivers, "
+        "separated by commas (e.g. Standard, Express). An imported order with "
+        "one of these shipping methods gets this carrier on the order and its "
+        "delivery. Upper and lower case do not matter.",
+    )
 
     _instance_carrier_unique = models.Constraint(
         "UNIQUE(instance_id, carrier_id)",
@@ -308,6 +315,14 @@ class ShopifyCarrierMapping(models.Model):
                     self.env["delivery.carrier"].browse(values["carrier_id"]).name
                 )
         return super().create(vals_list)
+
+    def _shipping_method_name_set(self):
+        self.ensure_one()
+        return {
+            name.strip().casefold()
+            for name in (self.shipping_method_names or "").split(",")
+            if name.strip()
+        }
 
     @api.constrains("instance_id", "carrier_id")
     def _check_carrier_company(self):
@@ -360,8 +375,22 @@ class ShopifyInstanceFulfillmentConfiguration(models.Model):
         string="Validate Deliveries from Webhooks",
         default=False,
         help=(
-            "Validate matching Odoo deliveries when an external Shopify "
-            "fulfillment webhook is received. Disabled is log-only."
+            "When Shopify reports a fulfillment made outside Odoo, validate "
+            "the fulfilled items on the order's open deliveries and copy the "
+            "carrier and tracking number. When disabled, the fulfillment is "
+            "imported with its tracking number, but the deliveries are left "
+            "as they are, to be validated by hand."
+        ),
+    )
+    fulfillment_validate_unreserved = fields.Boolean(
+        string="Ship Unreserved Stock",
+        default=False,
+        help=(
+            "When validating a delivery from a Shopify fulfillment, ship the "
+            "fulfilled items even when Odoo could not reserve their stock. "
+            "When disabled, the fulfillment goes to error until the stock is "
+            "reserved. Products tracked by lot or serial number always need "
+            "reserved stock."
         ),
     )
     fulfillment_validate_unreserved = fields.Boolean(
@@ -390,4 +419,11 @@ class StockPickingShopifyFulfillmentBinding(models.Model):
         "picking_id",
         string="Shopify Fulfillments",
         readonly=True,
+    )
+    shopify_push_pending = fields.Boolean(
+        readonly=True,
+        copy=False,
+        help="The delivery was validated while its Shopify order was not "
+        "synced, so it was not sent to Shopify yet. It is sent after the "
+        "next successful import of the order.",
     )

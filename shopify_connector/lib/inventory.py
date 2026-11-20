@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any
 
 VALID_QUANTITY_BASES = {"free_qty", "qty_available"}
@@ -15,12 +15,14 @@ def quantity_for_basis(
     qty_available: Any,
     basis: str = "free_qty",
 ) -> int:
-    """Select and integerize the configured Odoo stock quantity."""
+    """Select the configured Odoo stock quantity, rounded down to whole units."""
 
     if basis not in VALID_QUANTITY_BASES:
         raise ValueError(f"Unsupported inventory quantity basis: {basis}")
     value = free_qty if basis == "free_qty" else qty_available
-    return int(Decimal(str(value or 0)).quantize(Decimal("1"), ROUND_HALF_UP))
+    # Drop float noise first, so a sum such as 2.9999999999999996 stays 3.
+    quantity = Decimal(str(value or 0)).quantize(Decimal("0.000001"), ROUND_HALF_UP)
+    return int(quantity.quantize(Decimal("1"), ROUND_FLOOR))
 
 
 def apply_negative_policy(quantity: int, allow_negative: bool) -> tuple[int, bool]:
@@ -58,11 +60,15 @@ def build_inventory_set_payload(
     inventory_item_id: str,
     location_id: str,
     quantity: int,
-    compare_quantity: int,
+    change_from_quantity: int,
     *,
     reference_document_uri: str | None = None,
 ) -> dict[str, Any]:
-    """Build an ``InventorySetQuantitiesInput`` using compare-and-set."""
+    """Build an ``InventorySetQuantitiesInput`` using compare-and-set.
+
+    ``changeFromQuantity`` replaces ``compareQuantity``, which Shopify removes
+    in API version 2026-04. Both work in 2026-01.
+    """
 
     payload: dict[str, Any] = {
         "name": "available",
@@ -72,7 +78,7 @@ def build_inventory_set_payload(
                 "inventoryItemId": inventory_item_id,
                 "locationId": location_id,
                 "quantity": int(quantity),
-                "compareQuantity": int(compare_quantity),
+                "changeFromQuantity": int(change_from_quantity),
             }
         ],
     }
@@ -143,6 +149,9 @@ def is_stale_compare_error(error: Exception | str) -> bool:
     """Recognize Shopify's compare-and-set mismatch user errors."""
 
     message = str(error).casefold()
+    # "The changeFromQuantity argument no longer matches the persisted quantity."
+    if "changefromquantity" in message or "change_from_quantity_stale" in message:
+        return True
     return "compare" in message and (
         "quantity" in message or "persisted" in message or "stale" in message
     )
