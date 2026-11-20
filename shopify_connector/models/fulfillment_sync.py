@@ -980,7 +980,15 @@ class ShopifyExternalFulfillmentImport(models.Model):
                 quantities[line_id] += int(line.get("quantity") or 0)
         if not quantities:
             for line in webhook_payload.get("line_items") or []:
-                line_id = shopify_gid("LineItem", line.get("id"))
+                # Shopify REST fulfillment payloads use id for the order
+                # line. Some providers also include an explicit line_item_id;
+                # prefer that when present, never fulfillment_line_item_id.
+                order_line_id = (
+                    line.get("line_item_id")
+                    or line.get("admin_graphql_api_id")
+                    or line.get("id")
+                )
+                line_id = shopify_gid("LineItem", order_line_id)
                 if line_id:
                     quantities[line_id] += int(line.get("quantity") or 0)
         if not quantities:
@@ -1080,12 +1088,23 @@ class ShopifyExternalFulfillmentImport(models.Model):
         needed = {}
         sale_lines = self.env["sale.order.line"]
         for line_id, quantity in quantities.items():
+            if not quantity:
+                continue
             line_binding = self.order_binding_id.line_binding_ids.filtered(
                 lambda item, line_id=line_id: item.shopify_id == line_id
             )[:1]
             sale_line = line_binding.odoo_id
-            # Services, and lines without an Odoo sale line, ship nothing.
-            if not quantity or sale_line.product_id.type != "consu":
+            if not sale_line:
+                raise ShopifyFulfillmentError(
+                    self.env._(
+                        "Shopify fulfillment line %(line)s has no mapped "
+                        "Odoo order line on %(order)s; no stock was shipped.",
+                        line=line_id,
+                        order=self.order_binding_id.order_name,
+                    )
+                )
+            # Mapped services do not create stock moves.
+            if sale_line.product_id.type != "consu":
                 continue
             sale_lines |= sale_line
             for product, product_quantity in self._external_line_needs(
