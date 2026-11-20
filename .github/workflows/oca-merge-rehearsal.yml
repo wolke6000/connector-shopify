@@ -25,9 +25,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -z "$(git status --porcelain=v1)"
           mkdir -p merge-review/conflicts
-          git status --porcelain=v1 > merge-review/status-before.txt
-          test ! -s merge-review/status-before.txt
+          git status --porcelain=v1 --untracked-files=no > merge-review/status-before.txt
           git rev-parse HEAD > merge-review/branch-head.txt
           git fetch --no-tags https://github.com/OCA/connector-shopify.git \
             refs/heads/19.0:refs/remotes/oca/19.0
