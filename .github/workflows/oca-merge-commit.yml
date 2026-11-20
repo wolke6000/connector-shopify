@@ -41,6 +41,10 @@ jobs:
           python -m compileall -q shopify_connector shopify_connector_account \
             shopify_connector_pos shopify_connector_website_sale
           git add -A
+          # Keep existing repository workflows: GitHub App token cannot update them.
+          # Resolve workflow alignment separately with authorized permissions.
+          git restore --source="$GITHUB_SHA" --staged --worktree -- .github/workflows
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
           test -z "$(git diff --name-only --diff-filter=U)"
           git diff --cached --stat
           test "$(git rev-parse MERGE_HEAD)" = \
