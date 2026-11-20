@@ -70,6 +70,45 @@ class TestShopifyInventory(TransactionCase):
             )
         return self.env["shopify.location"].create(values)
 
+    def test_inventory_import_remains_disabled_by_default(self):
+        # SW-OCA-011: inventory imports require their own approval. The
+        # Shopify available-quantity webhook can double-count order demand.
+        instance = self.env["shopify.instance"].create(
+            {
+                "name": "Inventory Import Off",
+                "shop_url": "inventory-off.myshopify.com",
+                "access_token": "test-token",
+                "webhook_secret": "test-secret",
+            }
+        )
+        self.assertFalse(instance.inventory_import_enabled)
+
+    def test_inventory_webhook_does_not_change_stock_when_import_disabled(self):
+        # SW-OCA-011: a received inventory webhook is not authorization to
+        # adjust Odoo stock, even when the product/location is mapped.
+        self._location_binding()
+        self.instance.inventory_import_enabled = False
+        event = self.env["shopify.webhook.event"].create(
+            {
+                "instance_id": self.instance.id,
+                "webhook_id": "inventory-import-off-1",
+                "topic": "inventory_levels/update",
+                "payload": {
+                    "inventory_item_id": 201,
+                    "location_id": 301,
+                    "available": 7,
+                },
+            }
+        )
+        quant = self.env["stock.quant"]
+        with (
+            patch.object(type(quant), "_update_available_quantity") as adjust,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            event._handle_inventory_level_update()
+        adjust.assert_not_called()
+        client.assert_not_called()
+
     def test_unmapped_location_refuses_inventory_write_and_logs(self):
         location = self._location_binding(mapped=False)
 
