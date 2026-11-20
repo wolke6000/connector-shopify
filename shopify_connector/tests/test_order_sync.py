@@ -504,7 +504,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_confirmed_order_zeroes_duplicate_duty_lines(self):
         binding = self._import_confirmed_two_line_order(616)
         sale = binding.odoo_id
-        duty_product = self.instance._ensure_duties_product()
+        self.instance._ensure_duties_product()
         first = self.env["sale.order.line"].with_context(
             shopify_order_import=True
         ).create(
@@ -517,11 +517,13 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                 "shopify_is_duty": True,
             }
         )
-        duplicate = first.with_context(shopify_order_import=True).copy()
+        duplicate = first.with_context(shopify_order_import=True).copy(
+            default={"shopify_is_duty": True}
+        )
         self.assertEqual(len(sale.order_line.filtered("shopify_is_duty")), 2)
-        payload = self._payload(
-            order_id=616,
-            total="12.00",
+        payload = self._two_line_payload(
+            616,
+            total="22.00",
             currentTotalDutiesSet=self._bag("2.00"),
             displayFinancialStatus="PAID",
             updatedAt="2026-01-12T10:00:00Z",
@@ -535,7 +537,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(duty_lines), 2)
         self.assertEqual(first.product_uom_qty, 1)
         self.assertEqual(duplicate.product_uom_qty, 0)
-        self.assertAlmostEqual(sale.amount_total, 12.00)
+        self.assertAlmostEqual(sale.amount_total, 22.00)
 
     def test_confirmed_order_zeroes_duplicate_rounding_lines(self):
         self.instance.order_confirmation_policy = "auto"
@@ -555,7 +557,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             == "shopify-subtotal-adjustment:gid://shopify/Order/617"
         )
         self.assertEqual(len(adjustment), 1)
-        duplicate = adjustment.with_context(shopify_order_import=True).copy()
+        duplicate = adjustment.with_context(shopify_order_import=True).copy(
+            default={"shopify_line_id": adjustment.shopify_line_id}
+        )
         payload = self._payload(
             order_id=617,
             total="10.01",
