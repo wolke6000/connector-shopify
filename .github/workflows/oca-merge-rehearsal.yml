@@ -32,6 +32,9 @@ jobs:
           git fetch --no-tags https://github.com/OCA/connector-shopify.git \
             refs/heads/19.0:refs/remotes/oca/19.0
           git rev-parse refs/remotes/oca/19.0 > merge-review/upstream-head.txt
+          # Git objects only, no checkout configuration or credentials.
+          # Allows local offline semantic conflict resolution from this artifact.
+          git bundle create merge-review/integration-repo.bundle HEAD refs/remotes/oca/19.0
           test "$(cat merge-review/upstream-head.txt)" = \
             "5454e91b2f1aa6225026b8cbf6058486607042f8"
           set +e
