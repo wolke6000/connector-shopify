@@ -75,6 +75,7 @@ class ShopifyFulfillmentOrder(models.Model):
         self.mapped("order_binding_id").action_refresh_fulfillment_orders()
         return True
 
+    # SW-OCA-005: manual mutation must respect the outbound write guard.
     def action_release_hold(self):
         if any(not binding.instance_id.fulfillment_export_enabled for binding in self):
             raise UserError(self.env._("Shopify fulfillment export is disabled."))
@@ -246,6 +247,7 @@ class ShopifyFulfillment(models.Model):
                     )
                 )
 
+    # SW-OCA-005: manual mutation must respect the outbound write guard.
     def action_cancel_shopify(self):
         if any(not item.instance_id.fulfillment_export_enabled for item in self):
             raise UserError(self.env._("Shopify fulfillment export is disabled."))
@@ -337,6 +339,8 @@ class ShopifyOrderFulfillmentRelation(models.Model):
 class ShopifyInstanceFulfillmentConfiguration(models.Model):
     _inherit = "shopify.instance"
 
+    # SW-OCA-005: fail-closed Shopify fulfillment mutations (default off).
+    # See docs/OCA-DEVIATIONS.md; inbound validation remains independent.
     fulfillment_export_enabled = fields.Boolean(
         string="Export Fulfillments to Shopify",
         default=False,
