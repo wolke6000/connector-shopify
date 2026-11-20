@@ -1,12 +1,18 @@
 # Switchology deviations from OCA connector-shopify (Odoo 19)
 
-> **Status: baseline inventory for the integration branch, not a completed upstream merge.**
+> **Status: OCA source merged into a DRAFT branch; behavioral/upgrade verification pending.**
 > Last reviewed: 2026-11-20.
 > Switchology fork baseline: `33a308f9774eba7fcc4bf3634397dbe873f0caec` (`19.0`).
 > OCA upstream reference: `5454e91b2f1aa6225026b8cbf6058486607042f8` (`19.0`).
 > Merge base: `64bac8e02a18a19f9b80922d89a009dbcc06eb2f`.
 > At baseline, fork was 37 commits ahead / 188 behind upstream; 25 files differed.
 > Update these references after each upstream integration or meaningful policy change.
+> Integration merge commit: `a6293a1974a3db62a74023b5b91930aca8f50155`
+> (parents: integration branch `369d90b0` and OCA `5454e91b`).
+> This is a **source integration only**, not a deployed or tested schema upgrade.
+> Post-merge diff against OCA has to be reviewed after follow-up fixes; do not
+> interpret the baseline 25-file inventory as the final difference count.
+
 
 ## Purpose and conventions
 
@@ -43,14 +49,40 @@ Verify by **tests** rather than by presence of comments alone.
 | **SW-OCA-005** | **KEEP** | Fulfillment mutations are fail-closed when `fulfillment_export_enabled=False`: outgoing picking enqueue/job, manual hold release/cancel and queued executions. New instances default false. OCA reference lacks this switch and includes **additional** outbound paths. | `models/fulfillment_binding.py`, `models/fulfillment_sync.py`; fork PR #13. | During OCA integration explicitly guard **`_push_picking_fulfillment`, `_queue_missed_fulfillment_pushes`, `_queue_shopify_tracking_update`, `_job_update_tracking`**, and all external mutation entry points, at enqueue **and** job execution. Test per-instance and already queued jobs. |
 | **SW-OCA-006** | **REVIEW / likely KEEP until upstream equivalent** | Fork preserves duty, shipping and subtotal-adjustment auxiliary lines on confirmed orders by setting quantity/amount to zero rather than unlinking. Base OCA retained removed ordinary product lines; exact auxiliary-line equivalence needs reconciliation. | `models/order_sync.py::_remove_auxiliary_lines` and auxiliary helpers; fork PRs #14 and #15. | Confirmed Odoo 19 orders, refunds, omitted shipping/duties, duplicate lines, reactivation, identity and idempotency; do not introduce deletions on confirmed orders. |
 | **SW-OCA-007** | **REVIEW** | Fork protects existing shipping/billing contacts when Shopify returns country-only or incomplete order-specific addresses; newer orders can include fully approved protected customer data. | `models/order_sync.py::_build_order` partner selection; fork PRs #8/#11, order normalization. | Confirm semantics against OCA's new address logic. Test both incomplete historical imports and complete newer payloads; never synthesize addresses or confuse customer defaults with order-specific addresses. |
-| **SW-OCA-008** | **UPSTREAM / adapt only as necessary** | Fork PR #16 ported much of upstream inbound fulfillment validation, including partial/multi-step/kit handling and carrier-booking suppression. | `models/fulfillment_sync.py`, `graphql/fulfillment.py`, `tests/test_fulfillment_inbound.py`. | Prefer upstream implementation after semantic merge; preserve independent `fulfillment_auto_validate_webhook` and `fulfillment_validate_unreserved` settings and SW-OCA-002/005. No duplicate implementation. |
+| **SW-OCA-008** | **UPSTREAM merged; test pending** | Fork PR #16 ported much of upstream inbound fulfillment validation, including partial/multi-step/kit handling and carrier-booking suppression. | `models/fulfillment_sync.py`, `graphql/fulfillment.py`, `tests/test_fulfillment_inbound.py`. | Prefer upstream implementation after semantic merge; preserve independent `fulfillment_auto_validate_webhook` and `fulfillment_validate_unreserved` settings and SW-OCA-002/005. No duplicate implementation. |
 | **SW-OCA-009** | **REVIEW** | Other altered order normalization, currency/tax/rounding, SKU and refund logic is not yet classified line-by-line. | `graphql/order.py`, `lib/order.py`, `models/order_sync.py`, tests. | Trace each remaining diff against upstream and tests. Prefer OCA's newer fixes; keep only a documented demonstrated behavior. No blanket 'keep all fork fixes'. |
-| **SW-OCA-010** | **UPSTREAM migration gate** | OCA `19.0.1.7.0` removes `website_sale` from the main connector dependencies and adds `shopify_connector_website_sale` plus migration `19.0.1.1.0/pre-migration.py`. Fork is still `19.0.1.0.3`, with media bindings in the base module. | Module manifest, product-image models/controllers, migration and glue module. This is a **schema/module migration**, not a mere source diff. | Isolated post-cleanup restore; verify module available and pre-migration succeeds; preserve product-image bindings. OCA migration raises if image bindings exist and glue module is unavailable. Never trial directly on production. |
+| **SW-OCA-010** | **Source integrated; DB upgrade gate OPEN** | OCA `19.0.1.7.0` removes `website_sale` from the main connector dependencies and adds `shopify_connector_website_sale` plus migration `19.0.1.1.0/pre-migration.py`. Fork is still `19.0.1.0.3`, with media bindings in the base module. | Module manifest, product-image models/controllers, migration and glue module. This is a **schema/module migration**, not a mere source diff. | Isolated post-cleanup restore; verify module available and pre-migration succeeds; preserve product-image bindings. OCA migration raises if image bindings exist and glue module is unavailable. Never trial directly on production. |
 | **SW-OCA-011** | **REVIEW** | Inventory export controls have product **and** variant binding flags and independent location/quantity semantics. Fork differs slightly in inventory GraphQL and sync code. | `graphql/inventory.py`, `models/inventory_sync.py`, `models/product_binding.py`. | Preserve independently approved inventory writes, unchanged scopes and opt-in; compare upstream, test reconciliation plus stock mutation without product/fulfillment writes. |
 
 These entries classify **known functional deviations and migration risks**, not all 25 baseline changed
 files. Differences in tests, translations, package versions and display metadata still require
 normal merge review; never assume undocumented diffs are approved.
+
+## Source integration outcome (2026-11-20)
+
+- Real two-parent merge commit `a6293a1974a3db62a74023b5b91930aca8f50155`.
+  OCA `5454e91b` is an ancestor of the integration branch; the 188 previous
+  missing upstream commits are now in its history.
+- An actual `git merge --no-commit` reported **13 textual conflict files**
+  (41 conflict regions). The remaining overlapping paths merged automatically.
+  The decision log is `docs/OCA-MERGE-REVIEW.md`.
+- The OCA media glue module `shopify_connector_website_sale` and the upstream
+  pre-migration were added to source. No actual database upgrade or migration
+  has been performed.
+- `SW-OCA-004` and `SW-OCA-005` are retained as explicit outbound
+  write safeguards. Newly introduced OCA missed-fulfillment and tracking
+  mutation paths are guarded for disabled exports; regression verification
+  is still required.
+- `SW-OCA-001`, `SW-OCA-002`, `SW-OCA-003`, `SW-OCA-006`, and
+  `SW-OCA-007` have provisional merged implementations; their release
+  behavior is **not yet accepted**.
+- The base fork's `.github/workflows/` definitions are intentionally retained
+  because the GitHub Actions app token cannot update workflow files. The
+  OCA workflow improvements remain a **separate permissions/review task**.
+- Merge-candidate Python syntax and duplicate-class-method checks passed
+  in the offline integration rehearsal. This does not validate Odoo behavior.
+  GitHub CI and isolated Odoo database upgrade remain independent release gates.
+- No Odoo main/submodule production pin or live Shopify configuration changed.
 
 ## Baseline changed-file inventory (fork relative to OCA 19.0)
 
@@ -82,4 +114,4 @@ Add a ledger row with: **ID → exact entry points → upstream alternative / co
 
 ## Resolved/upstreamed items
 
-_Move entries here only after verifying the replacement with tests; retain the old ID and cite the upstream reference. None classified resolved by this document alone._
+_Upstream code was integrated (not yet verified by Odoo tests). Move individual IDs here only after behavior and upgrade tests pass; do not infer resolved status from a successful Git merge._
