@@ -479,18 +479,20 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_confirmed_auxiliary_cleanup_does_not_unlink(self):
         binding = self._import_confirmed_two_line_order(615)
         sale = binding.odoo_id
-        duty = self.env["sale.order.line"].with_context(
-            shopify_order_import=True
-        ).create(
-            {
-                "order_id": sale.id,
-                "product_id": self.product.id,
-                "name": "Obsolete duty",
-                "product_uom_qty": 1,
-                "price_unit": 2,
-                "shopify_expected_total": "2.00",
-                "shopify_is_duty": True,
-            }
+        duty = (
+            self.env["sale.order.line"]
+            .with_context(shopify_order_import=True)
+            .create(
+                {
+                    "order_id": sale.id,
+                    "product_id": self.product.id,
+                    "name": "Obsolete duty",
+                    "product_uom_qty": 1,
+                    "price_unit": 2,
+                    "shopify_expected_total": "2.00",
+                    "shopify_is_duty": True,
+                }
+            )
         )
         with patch.object(
             type(self.env["sale.order.line"]),
@@ -505,17 +507,19 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         binding = self._import_confirmed_two_line_order(616)
         sale = binding.odoo_id
         self.instance._ensure_duties_product()
-        first = self.env["sale.order.line"].with_context(
-            shopify_order_import=True
-        ).create(
-            {
-                "order_id": sale.id,
-                "product_id": self.instance.duties_product_id.id,
-                "name": "Legacy duty",
-                "product_uom_qty": 1,
-                "price_unit": 1,
-                "shopify_is_duty": True,
-            }
+        first = (
+            self.env["sale.order.line"]
+            .with_context(shopify_order_import=True)
+            .create(
+                {
+                    "order_id": sale.id,
+                    "product_id": self.instance.duties_product_id.id,
+                    "name": "Legacy duty",
+                    "product_uom_qty": 1,
+                    "price_unit": 1,
+                    "shopify_is_duty": True,
+                }
+            )
         )
         duplicate = first.with_context(shopify_order_import=True).copy(
             default={"shopify_is_duty": True}
@@ -573,10 +577,15 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertTrue(duplicate.exists())
         self.assertEqual(duplicate.product_uom_qty, 0)
-        self.assertEqual(len(sale.order_line.filtered(
-            lambda line: line.shopify_line_id
-            == "shopify-subtotal-adjustment:gid://shopify/Order/617"
-        )), 2)
+        self.assertEqual(
+            len(
+                sale.order_line.filtered(
+                    lambda line: line.shopify_line_id
+                    == "shopify-subtotal-adjustment:gid://shopify/Order/617"
+                )
+            ),
+            2,
+        )
         self.assertAlmostEqual(sale.amount_total, 10.01)
 
     def test_draft_order_removes_obsolete_duty_line(self):
