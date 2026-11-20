@@ -17,6 +17,7 @@ from odoo.addons.shopify_connector.graphql.order import (
     ORDER_BY_ID_QUERY,
 )
 from odoo.addons.shopify_connector.lib.client import ShopifyError
+from odoo.addons.shopify_connector.graphql.order import orders_updated_search
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -1623,6 +1624,47 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         ):
             self.instance._job_sync_updated_orders()
         self.assertEqual(self.instance.order_drift_since, original)
+
+    def test_drift_first_run_scans_two_days_with_overlap(self):
+        # SW-OCA-003: preserve the upstream initial window, plus a one-hour
+        # overlap; the pending ledger makes subsequent retries durable.
+        self.instance.write(
+            {
+                "order_drift_since": False,
+                "order_drift_pending": {},
+                "draft_order_import_enabled": False,
+            }
+        )
+        client = Mock()
+        client.execute.return_value = {
+            "orders": {"nodes": [], "pageInfo": {"hasNextPage": False}}
+        }
+        with (
+            freeze_time("2026-11-02 09:00:00"),
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 0)
+        self.assertEqual(
+            client.execute.call_args.args[1]["query"],
+            "updated_at:>='2026-10-31T08:00:00Z'",
+        )
+        self.assertEqual(self.instance.order_drift_since, datetime(2026, 11, 2, 9))
+
+    def test_drift_cron_queues_reconciliation(self):
+        # SW-OCA-003: normal scheduling must keep using the pending ledger.
+        with trap_jobs() as trap:
+            self.env["shopify.instance"]._cron_reconcile_orders()
+        trap.assert_jobs_count(1, only=self.instance._job_sync_updated_orders)
+
+    def test_drift_search_converts_timezone_to_utc(self):
+        # Preserve upstream query semantics independently of the ledger.
+        since = datetime(
+            2026, 11, 2, 10, 30, 15, 500, tzinfo=timezone(timedelta(hours=1))
+        )
+        self.assertEqual(
+            orders_updated_search(since),
+            "updated_at:>='2026-11-02T09:30:15Z'",
+        )
 
     def test_order_queries_request_full_upstream_addresses(self):
         self.assertEqual(
