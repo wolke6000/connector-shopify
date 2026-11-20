@@ -584,3 +584,88 @@ class TestShopifyInboundFulfillment(TransactionCase):
         self.assertEqual(fulfillment.state, "synced")
         self.assertEqual(self.sale.picking_ids.state, "done")
         self.assertFalse(self.instance.fulfillment_export_enabled)
+
+    def test_webhook_fallback_uses_order_line_id_not_fulfillment_line_id(self):
+        self._stock(self.widget, 2)
+        self._stock(self.gadget, 2)
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        webhook = {
+            "id": 961,
+            "order_id": 810,
+            "status": "success",
+            "line_items": [
+                {
+                    "id": 99991,
+                    "line_item_id": int(self.widget_line.shopify_id.rsplit("/", 1)[-1]),
+                    "quantity": 2,
+                },
+                {
+                    "id": 99992,
+                    "line_item_id": int(self.gadget_line.shopify_id.rsplit("/", 1)[-1]),
+                    "quantity": 2,
+                },
+            ],
+        }
+        client = MagicMock()
+        client.execute.return_value = {"fulfillment": None}
+        with patch.object(
+            type(self.instance), "_shopify_client", return_value=client
+        ), trap_jobs() as trap:
+            result = self.env["shopify.fulfillment"]._job_import_from_shopify(
+                self.instance.id, "gid://shopify/Fulfillment/961", webhook
+            )
+        trap.assert_jobs_count(0)
+        self.assertEqual(picking.state, "done")
+        self.assertEqual(
+            self.env["shopify.fulfillment"].browse(result).picking_id, picking
+        )
+
+    def test_webhook_fallback_accepts_order_line_id_in_id(self):
+        self._stock(self.widget, 2)
+        self._stock(self.gadget, 2)
+        self.sale.action_confirm()
+        webhook = {
+            "order_id": 810,
+            "status": "success",
+            "line_items": [
+                {
+                    "id": int(self.widget_line.shopify_id.rsplit("/", 1)[-1]),
+                    "quantity": 2,
+                },
+                {
+                    "id": int(self.gadget_line.shopify_id.rsplit("/", 1)[-1]),
+                    "quantity": 2,
+                },
+            ],
+        }
+        client = MagicMock()
+        client.execute.return_value = {"fulfillment": None}
+        with patch.object(
+            type(self.instance), "_shopify_client", return_value=client
+        ), trap_jobs() as trap:
+            self.env["shopify.fulfillment"]._job_import_from_shopify(
+                self.instance.id, "gid://shopify/Fulfillment/962", webhook
+            )
+        trap.assert_jobs_count(0)
+        self.assertEqual(self.sale.picking_ids.state, "done")
+
+    def test_unmapped_fulfillment_line_does_not_ship_matched_lines(self):
+        self._stock(self.widget, 2)
+        self._stock(self.gadget, 2)
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        payload = self._payload(
+            963, [(self.widget_line, 2), (self.gadget_line, 2)]
+        )
+        payload["fulfillmentLineItems"]["nodes"].append(
+            {
+                "quantity": 1,
+                "lineItem": {"id": "gid://shopify/LineItem/9999999"},
+            }
+        )
+        fulfillment = self._import(payload)
+        self.assertEqual(fulfillment.state, "error")
+        self.assertIn("no mapped Odoo order line", fulfillment.error_message)
+        self.assertNotEqual(picking.state, "done")
+        self.assertFalse(picking.move_ids.filtered(lambda move: move.state == "done"))
