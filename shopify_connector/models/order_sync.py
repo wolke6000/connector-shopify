@@ -118,6 +118,8 @@ class ShopifyInstanceOrderSync(models.Model):
                 record=instance,
             )
 
+    # SW-OCA-003: durable drift ledger pending upstream equivalence review.
+    # See docs/OCA-DEVIATIONS.md.
     def _job_sync_updated_orders(self):
         self = self.sudo()
         self.ensure_one()
@@ -443,6 +445,7 @@ class ShopifyOrderSync(models.Model):
             ],
             limit=1,
         )
+        # SW-OCA-001: prevent reimport after one-off cleanup; see docs/OCA-DEVIATIONS.md.
         # Unknown historical orders, including failed legacy bindings, must not
         # be created or retried automatically. Synced bindings may be updated.
         # This shared job is invoked by webhook, bulk and drift imports.
@@ -609,6 +612,8 @@ class ShopifyOrderSync(models.Model):
         has_billing_details = self._has_order_address_details(billing_address)
         # On Shopify plans without protected customer data we may receive only
         # countryCodeV2. That cannot establish a contact/address change.
+        # SW-OCA-007: do not replace stored contacts with incomplete addresses.
+        # See docs/OCA-DEVIATIONS.md.
         # Preserve existing Odoo contacts rather than replacing them with the
         # guest partner (or treating the absence of PII as address drift).
         shipping_partner = (
@@ -1079,6 +1084,8 @@ class ShopifyOrderSync(models.Model):
             if identifier not in incoming_ids:
                 self._remove_auxiliary_lines(sale_order, line_binding.odoo_id)
 
+    # SW-OCA-006: confirmed-order auxiliary lines must not be unlinked.
+    # See docs/OCA-DEVIATIONS.md; compare with newer upstream helpers.
     def _remove_auxiliary_lines(self, sale_order, lines):
         """Retain zero-quantity auxiliary lines on confirmed sales orders."""
         if not lines:
@@ -1534,6 +1541,7 @@ class ShopifyOrderSync(models.Model):
                     ),
                 )
 
+    # SW-OCA-002: independent historical auto-confirm cutoff; see docs/OCA-DEVIATIONS.md.
     def _is_after_confirmation_cutoff(self, instance, order_data):
         """Protect all automatic confirmation paths, not only payment status."""
         cutoff = instance.auto_confirm_order_date_from
