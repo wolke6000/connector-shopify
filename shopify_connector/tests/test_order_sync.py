@@ -315,6 +315,194 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertAlmostEqual(adjustment.price_unit, 0.01, places=2)
         self.assertFalse(adjustment.tax_ids)
 
+    def test_confirmed_order_removes_and_restores_duty_line(self):
+        self.instance.order_confirmation_policy = "auto"
+        first = self._payload(
+            order_id=611,
+            total="12.00",
+            currentTotalDutiesSet=self._bag("2.00"),
+            displayFinancialStatus="PAID",
+        )
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(self.instance.id, first)
+        )
+        sale = binding.odoo_id
+        duty = sale.order_line.filtered("shopify_is_duty")
+        self.assertEqual(sale.state, "sale")
+        self.assertEqual(len(duty), 1)
+        self.assertAlmostEqual(sale.amount_total, 12.00)
+
+        removed = self._payload(
+            order_id=611,
+            total="10.00",
+            currentTotalDutiesSet=self._bag("0.00"),
+            displayFinancialStatus="PAID",
+            updatedAt="2026-01-11T10:00:00Z",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(sale.order_line.filtered("shopify_is_duty"), duty)
+        self.assertEqual(duty.product_uom_qty, 0)
+        self.assertEqual(duty.shopify_expected_total, "0")
+        self.assertAlmostEqual(sale.amount_total, 10.00)
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed), binding.id
+        )
+        self.assertEqual(len(sale.order_line.filtered("shopify_is_duty")), 1)
+
+        restored = self._payload(
+            order_id=611,
+            total="12.00",
+            currentTotalDutiesSet=self._bag("2.00"),
+            displayFinancialStatus="PAID",
+            updatedAt="2026-01-12T10:00:00Z",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, restored),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(sale.order_line.filtered("shopify_is_duty"), duty)
+        self.assertEqual(duty.product_uom_qty, 1)
+        self.assertAlmostEqual(sale.amount_total, 12.00)
+
+    def test_confirmed_order_removes_and_restores_shipping_line(self):
+        self.instance.order_confirmation_policy = "auto"
+        shipping = {
+            "id": "gid://shopify/ShippingLine/612",
+            "title": "Shipping",
+            "originalPriceSet": self._bag("2.00"),
+            "currentDiscountedPriceSet": self._bag("2.00"),
+            "taxLines": [],
+        }
+        initial = self._payload(
+            order_id=612,
+            total="12.00",
+            currentShippingPriceSet=self._bag("2.00"),
+            shippingLines={"nodes": [shipping]},
+            displayFinancialStatus="PAID",
+        )
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(self.instance.id, initial)
+        )
+        sale = binding.odoo_id
+        shipping_line = binding.line_binding_ids.filtered("is_shipping").odoo_id
+        self.assertEqual(sale.state, "sale")
+        self.assertEqual(len(shipping_line), 1)
+
+        removed = self._payload(
+            order_id=612,
+            total="10.00",
+            updatedAt="2026-01-11T10:00:00Z",
+            displayFinancialStatus="PAID",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(shipping_line.product_uom_qty, 0)
+        self.assertEqual(len(binding.line_binding_ids.filtered("is_shipping")), 1)
+        self.assertAlmostEqual(sale.amount_total, 10.00)
+
+        restored = self._payload(
+            order_id=612,
+            total="12.00",
+            currentShippingPriceSet=self._bag("2.00"),
+            shippingLines={"nodes": [shipping]},
+            updatedAt="2026-01-12T10:00:00Z",
+            displayFinancialStatus="PAID",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, restored),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(shipping_line.product_uom_qty, 1)
+        self.assertEqual(len(binding.line_binding_ids.filtered("is_shipping")), 1)
+        self.assertAlmostEqual(sale.amount_total, 12.00)
+
+    def test_confirmed_order_removes_and_restores_rounding_line(self):
+        self.instance.order_confirmation_policy = "auto"
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(
+                    order_id=613, total="10.01", displayFinancialStatus="PAID"
+                ),
+            )
+        )
+        sale = binding.odoo_id
+        adjustment = sale.order_line.filtered(
+            lambda line: line.shopify_line_id
+            == "shopify-subtotal-adjustment:gid://shopify/Order/613"
+        )
+        self.assertEqual(sale.state, "sale")
+        self.assertEqual(len(adjustment), 1)
+
+        removed = self._payload(
+            order_id=613,
+            total="10.00",
+            updatedAt="2026-01-11T10:00:00Z",
+            displayFinancialStatus="PAID",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(adjustment.product_uom_qty, 0)
+        self.assertAlmostEqual(sale.amount_total, 10.00)
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed), binding.id
+        )
+        self.assertEqual(len(sale.order_line & adjustment), 1)
+
+        restored = self._payload(
+            order_id=613,
+            total="10.01",
+            updatedAt="2026-01-12T10:00:00Z",
+            displayFinancialStatus="PAID",
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, restored),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertEqual(adjustment.product_uom_qty, 1)
+        self.assertAlmostEqual(sale.amount_total, 10.01)
+
+    def test_draft_order_removes_obsolete_duty_line(self):
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(
+                self.instance.id,
+                self._payload(
+                    order_id=614,
+                    total="12.00",
+                    currentTotalDutiesSet=self._bag("2.00"),
+                ),
+            )
+        )
+        sale = binding.odoo_id
+        duty = sale.order_line.filtered("shopify_is_duty")
+        self.assertEqual(sale.state, "draft")
+        self.assertEqual(len(duty), 1)
+        removed = self._payload(
+            order_id=614, total="10.00", updatedAt="2026-01-11T10:00:00Z"
+        )
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, removed),
+            binding.id,
+            binding.error_message,
+        )
+        self.assertFalse(duty.exists())
+        self.assertFalse(sale.order_line.filtered("shopify_is_duty"))
+        self.assertAlmostEqual(sale.amount_total, 10.00)
+
     def test_delivered_order_shipping_does_not_count_as_product_edit(self):
         shipping = {
             "id": "gid://shopify/ShippingLine/330",
