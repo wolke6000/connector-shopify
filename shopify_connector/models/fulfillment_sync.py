@@ -715,6 +715,12 @@ class ShopifyFulfillmentActions(models.Model):
 class StockPickingShopifyFulfillmentSync(models.Model):
     _inherit = "stock.picking"
 
+    def send_to_shipper(self):
+        # Shopify already shipped the parcel; never purchase another label.
+        if self.env.context.get("skip_shopify_carrier_booking"):
+            return
+        return super().send_to_shipper()
+
     def _action_done(self, *args, **kwargs):
         result = super()._action_done(*args, **kwargs)
         if self.env.context.get("skip_shopify_fulfillment_push"):
@@ -1364,6 +1370,24 @@ class ShopifyExternalFulfillmentImport(models.Model):
                 changes["carrier_id"] = values["carrier_id"]
             if changes:
                 picking.write(changes)
+
+
+class SaleOrderShopifyFulfillmentRetry(models.Model):
+    _inherit = "sale.order"
+
+    def action_release_shopify_risk_hold(self):
+        result = super().action_release_shopify_risk_hold()
+        fulfillments = self.sudo().shopify_binding_ids.fulfillment_ids.filtered(
+            lambda item: (
+                item.origin == "shopify"
+                and item.state == "error"
+                and item.shopify_id
+                and not item.picking_id
+            )
+        )
+        if fulfillments:
+            fulfillments.action_retry_sync()
+        return result
 
 
 WEBHOOK_HANDLERS.update(
