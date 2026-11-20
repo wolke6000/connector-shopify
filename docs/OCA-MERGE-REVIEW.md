@@ -1,12 +1,12 @@
 # OCA 19.0 integration: three-way merge review and release gates
 
-**Status:** pre-merge assessment (no OCA merge commit, no integration test executed).
+**Status:** two-parent OCA merge committed in draft integration branch; functional and database-upgrade review pending.
 **Updated:** 2026-11-20.
 
 | Revision | Commit |
 |---|---|
 | Switchology baseline (`19.0`) | `33a308f9774eba7fcc4bf3634397dbe873f0caec` |
-| Integration branch (documented policy and regression test) | Check branch HEAD at execution; do not rely on this file for a moving SHA |
+| Source integration merge commit | `a6293a1974a3db62a74023b5b91930aca8f50155` (parents `369d90b0`, `5454e91b`) |
 | OCA `19.0` integration target | `5454e91b2f1aa6225026b8cbf6058486607042f8` |
 | Common ancestor | `64bac8e02a18a19f9b80922d89a009dbcc06eb2f` |
 
@@ -25,6 +25,52 @@ an **overlap inventory**, not a count of actual Git textual merge conflicts.
 - 87 paths identical to the common ancestor.
 - Newly introduced OCA module `shopify_connector_website_sale` must be available
   during upgrade, regardless of apparent merge cleanliness.
+
+## Actual Git merge result (2026-11-20)
+
+The read-only GitHub Actions rehearsal performed a genuine `git merge --no-commit --no-ff`
+of the pinned OCA SHA, then aborted and saved its conflict files. It reported
+**13 actual conflict paths and 41 textual conflict sections**:
+
+- `shopify_connector/__manifest__.py` (1)
+- `shopify_connector/graphql/order.py` (3)
+- `shopify_connector/lib/order.py` (1)
+- `shopify_connector/models/fulfillment_sync.py` (8)
+- `shopify_connector/models/order_binding.py` (1)
+- `shopify_connector/models/order_sync.py` (10)
+- `shopify_connector/models/product_binding.py` (1)
+- `shopify_connector/models/product_sync.py` (1)
+- `shopify_connector/tests/__init__.py` (1)
+- `shopify_connector/tests/test_fulfillment_inbound.py` (1)
+- `shopify_connector/tests/test_fulfillment_sync.py` (2)
+- `shopify_connector/tests/test_order_sync.py` (9)
+- `shopify_connector/tests/test_product_sync.py` (2)
+
+The resolution was generated locally and independently reproduced in a
+read-only CI rehearsal, including Python compilation and duplicate-method
+detection. A second gated GitHub Actions run committed the real two-parent
+merge as `a6293a19` and pushed it to the **integration branch only**.
+
+**Important semantic choices:**
+
+- Retain the fail-closed historical import guard and its cleanup-replay test;
+  keep synced historical bindings eligible for permitted updates.
+- Retain independent auto-confirm cutoff, durable order drift ledger, and
+  confirmed-order auxiliary-line preservation; remove duplicate shadowing
+  implementations introduced by merging separately developed methods.
+- Use OCA's new fulfillment retry, tracking, and missed-push architecture,
+  with `fulfillment_export_enabled` enforced at enqueue **and** execution.
+- Use OCA's relocated image models and `shopify_connector_website_sale`.
+  Database upgrade and image ownership migration remain untested.
+- Preserve the existing fork `.github/workflows/` definitions because
+  the GitHub Actions token lacked permission to modify workflow files.
+  Review this infrastructure divergence separately.
+- Temporary CI merge workflows, the one-off resolution script, and trigger
+  file were removed after creating the merge commit.
+
+**This is not a production or CI acceptance.** The merge will need
+green functional CI, an isolated neutralized post-cleanup Odoo upgrade,
+and independent review before PR #17 is ready.
 
 ## Overlapping paths: required disposition
 
@@ -100,10 +146,10 @@ outbound guard in code and test it **before creating a merge commit**.
    before opening a ready-for-review integration PR. Merge of this branch is not
    authority to change `odoo-switchology` submodule pin or run production deployment.
 
-### Current evidence
+### Verification evidence and remaining gates
 
 - The integration branch has policy comments and `docs/OCA-DEVIATIONS.md`.
 - The branch now includes `test_cutover_blocks_reimport_of_deleted_historical_binding`;
   it has **not** been exercised against an Odoo runtime in this task.
-- No OCA merge or module upgrade is claimed by this assessment. No production
-  changes are authorized.
+- OCA source merge commit `a6293a19` is confirmed. A live or isolated
+  Odoo module upgrade **has not** been performed; no production change is authorized.
