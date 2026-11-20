@@ -393,17 +393,6 @@ class ShopifyInstanceFulfillmentConfiguration(models.Model):
             "reserved stock."
         ),
     )
-    fulfillment_validate_unreserved = fields.Boolean(
-        string="Ship Unreserved Stock",
-        default=False,
-        help=(
-            "When validating a delivery from a Shopify fulfillment, ship the "
-            "fulfilled items even when Odoo could not reserve their stock. "
-            "When disabled, the fulfillment goes to error until the stock is "
-            "reserved. Products tracked by lot or serial number always need "
-            "reserved stock."
-        ),
-    )
     carrier_mapping_ids = fields.One2many(
         "shopify.carrier.mapping",
         "instance_id",
