@@ -983,11 +983,7 @@ class ShopifyExternalFulfillmentImport(models.Model):
                 # Shopify REST fulfillment payloads use id for the order
                 # line. Some providers also include an explicit line_item_id;
                 # prefer that when present, never fulfillment_line_item_id.
-                order_line_id = (
-                    line.get("line_item_id")
-                    or line.get("admin_graphql_api_id")
-                    or line.get("id")
-                )
+                order_line_id = line.get("line_item_id") or line.get("id")
                 line_id = shopify_gid("LineItem", order_line_id)
                 if line_id:
                     quantities[line_id] += int(line.get("quantity") or 0)
