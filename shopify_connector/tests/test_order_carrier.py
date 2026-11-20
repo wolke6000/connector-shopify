@@ -54,6 +54,8 @@ class TestOrderCarrier(AccountTestInvoicingCommon):
                     "webhook_secret": "test-secret",
                     "order_confirmation_policy": "auto",
                     "auto_confirm_paid": True,
+                    # SW-OCA-001: OCA fixtures must opt into post-cutoff imports.
+                    "order_import_date_from": "2026-01-01",
                 }
                 for letter in ("A", "B")
             ]
