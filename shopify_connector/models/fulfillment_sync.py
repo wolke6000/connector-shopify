@@ -378,6 +378,8 @@ class ShopifyOrderFulfillmentSync(models.Model):
             url,
         )
 
+    # SW-OCA-005: block already-queued fulfillment writes at execution.
+    # See docs/OCA-DEVIATIONS.md.
     def _job_push_picking_fulfillment(self, picking_id):  # noqa: C901
         self = self.sudo()
         self.ensure_one()
@@ -630,6 +632,7 @@ class ShopifyOrderFulfillmentSync(models.Model):
 class ShopifyFulfillmentOrderActions(models.Model):
     _inherit = "shopify.fulfillment.order"
 
+    # SW-OCA-005: block already-queued manual hold-release mutations.
     def _job_release_hold(self):
         self = self.sudo()
         self.ensure_one()
@@ -670,6 +673,7 @@ class ShopifyFulfillmentOrderActions(models.Model):
 class ShopifyFulfillmentActions(models.Model):
     _inherit = "shopify.fulfillment"
 
+    # SW-OCA-005: block already-queued fulfillment cancellation mutations.
     def _job_cancel_shopify(self):
         self = self.sudo()
         self.ensure_one()
@@ -727,6 +731,7 @@ class StockPickingShopifyFulfillmentSync(models.Model):
             return
         return super().send_to_shipper()
 
+    # SW-OCA-005: only enqueue outbound jobs for explicitly enabled instances.
     def _action_done(self, *args, **kwargs):
         result = super()._action_done(*args, **kwargs)
         if self.env.context.get("skip_shopify_fulfillment_push"):
