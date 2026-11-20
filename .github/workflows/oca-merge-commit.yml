@@ -1,0 +1,52 @@
+# Temporary workflow. Only the explicitly named trigger commit may publish.
+# Delete after the integration branch has a reviewed two-parent merge commit.
+name: Commit pinned OCA merge candidate
+on:
+  push:
+    branches:
+      - refactor/oca-19.0-integration-20261120
+permissions:
+  contents: write
+jobs:
+  merge:
+    if: ${{ github.event.head_commit.message == '[CI] Execute pinned OCA merge candidate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact integration HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Merge pinned OCA and push to integration branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/refactor/oca-19.0-integration-20261120"
+          test -z "$(git status --porcelain=v1)"
+          git config user.name "Switchology Integration Bot"
+          git config user.email "ci@example.invalid"
+          git fetch --no-tags https://github.com/OCA/connector-shopify.git \
+            refs/heads/19.0:refs/remotes/oca/19.0
+          test "$(git rev-parse refs/remotes/oca/19.0)" = \
+            "5454e91b2f1aa6225026b8cbf6058486607042f8"
+          set +e
+          git merge --no-commit --no-ff refs/remotes/oca/19.0
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "Unexpected merge exit status: $status"
+            exit 1
+          fi
+          python scripts/resolve_oca_merge_candidate.py
+          python -m compileall -q shopify_connector shopify_connector_account \
+            shopify_connector_pos shopify_connector_website_sale
+          git add -A
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --stat
+          test "$(git rev-parse MERGE_HEAD)" = \
+            "5454e91b2f1aa6225026b8cbf6058486607042f8"
+          git -c user.name="Switchology Integration Bot" \
+            -c user.email="ci@example.invalid" \
+            commit -m "[WIP] Merge OCA 19.0 upstream with Switchology safety policies"
+          echo "Integration candidate commit: $(git rev-parse HEAD)"
+          git push origin HEAD:refs/heads/refactor/oca-19.0-integration-20261120
