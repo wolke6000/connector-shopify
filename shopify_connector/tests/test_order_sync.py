@@ -527,11 +527,12 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(sale.order_line.filtered("shopify_is_duty")), 2)
         payload = self._two_line_payload(
             616,
-            total="22.00",
             currentTotalDutiesSet=self._bag("2.00"),
             displayFinancialStatus="PAID",
             updatedAt="2026-01-12T10:00:00Z",
         )
+        # The two-line fixture sets 20.00 before adding Shopify duties.
+        payload["currentTotalPriceSet"] = self._bag("22.00")
         self.assertEqual(
             self.order_model._job_import_order(self.instance.id, payload),
             binding.id,
