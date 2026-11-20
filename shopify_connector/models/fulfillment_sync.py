@@ -849,11 +849,17 @@ class ShopifyExternalFulfillmentImport(models.Model):
             limit=1,
         )
         if not order_binding:
-            raise ShopifyFulfillmentError(
-                self.env._(
-                    "No synchronized Odoo order matches Shopify order %s.", order_id
-                )
+            instance._write_log(
+                entity="fulfillment",
+                direction="import",
+                level="info",
+                message=self.env._(
+                    "Shopify order %s is not imported yet. Its fulfillment is "
+                    "applied when the order is imported.",
+                    order_id,
+                ),
             )
+            return False
         binding = self.search(
             [
                 ("instance_id", "=", instance.id),
