@@ -16,3 +16,5 @@ from . import test_webhook_controller
 from . import test_fulfillment_sync
 from . import test_operability
 from . import test_onboarding
+
+from . import test_fulfillment_inbound
