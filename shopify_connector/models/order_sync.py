@@ -1093,7 +1093,7 @@ class ShopifyOrderSync(models.Model):
             # Do not silently alter auxiliary lines on cancelled orders.
             raise ShopifyOrderImportError(
                 self.env._(
-                    "Cannot adjust auxiliary lines of order %(order)s in state %(state)s.",
+                    "Cannot adjust lines of order %(order)s in state %(state)s.",
                     order=sale_order.name,
                     state=sale_order.state,
                 )
