@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from ..lib.fulfillment import (
@@ -15,6 +16,7 @@ class TestShopifyFulfillmentSync(TransactionCase):
         cls.instance = cls.env["shopify.instance"].create(
             {
                 "name": "Fulfillment Shop",
+                "fulfillment_export_enabled": True,
                 "shop_url": "fulfillment-shop.myshopify.com",
                 "access_token": "test-token",
                 "webhook_secret": "test-secret",
@@ -95,8 +97,59 @@ class TestShopifyFulfillmentSync(TransactionCase):
             }
         )
 
-    def test_fulfillment_export_enabled_by_default(self):
+    def test_explicitly_enabled_fulfillment_export(self):
         self.assertTrue(self.instance.fulfillment_export_enabled)
+
+    def test_new_instance_disables_fulfillment_export(self):
+        instance = self.env["shopify.instance"].create(
+            {
+                "name": "Read-only fulfillments",
+                "shop_url": "readonly-fulfillments.myshopify.com",
+                "access_token": "test-token",
+                "webhook_secret": "test-secret",
+            }
+        )
+        self.assertFalse(instance.fulfillment_export_enabled)
+
+    def test_hold_release_action_and_existing_job_are_blocked(self):
+        order = self.env["shopify.fulfillment.order"].create(
+            {
+                "instance_id": self.instance.id,
+                "order_binding_id": self.order_binding.id,
+                "shopify_id": "gid://shopify/FulfillmentOrder/992",
+                "is_held": True,
+            }
+        )
+        self.instance.fulfillment_export_enabled = False
+        with (
+            patch.object(type(order), "with_delay") as delayed,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            with self.assertRaises(UserError):
+                order.action_release_hold()
+            self.assertFalse(order._job_release_hold())
+        delayed.assert_not_called()
+        client.assert_not_called()
+
+    def test_cancel_action_and_existing_job_are_blocked(self):
+        fulfillment = self.env["shopify.fulfillment"].create(
+            {
+                "instance_id": self.instance.id,
+                "shopify_id": "gid://shopify/Fulfillment/993",
+                "order_binding_id": self.order_binding.id,
+                "origin": "odoo",
+            }
+        )
+        self.instance.fulfillment_export_enabled = False
+        with (
+            patch.object(type(fulfillment), "with_delay") as delayed,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            with self.assertRaises(UserError):
+                fulfillment.action_cancel_shopify()
+            self.assertFalse(fulfillment._job_cancel_shopify())
+        delayed.assert_not_called()
+        client.assert_not_called()
 
     def test_picking_validation_skips_fulfillment_when_export_disabled(self):
         self.env["stock.quant"]._update_available_quantity(

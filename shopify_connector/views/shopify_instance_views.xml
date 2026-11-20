@@ -129,6 +129,7 @@
                                     <field name="shop_currency_id" readonly="1" />
                                 </group>
                                 <group string="Operations">
+                                    <field name="product_export_enabled" />
                                     <button
                                         name="action_import_products"
                                         type="object"

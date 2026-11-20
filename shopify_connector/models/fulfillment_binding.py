@@ -1,7 +1,7 @@
 # pylint: disable=consider-merging-classes-inherited
 
 from odoo import api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 
 
 class ShopifyFulfillmentOrder(models.Model):
@@ -76,6 +76,8 @@ class ShopifyFulfillmentOrder(models.Model):
         return True
 
     def action_release_hold(self):
+        if any(not binding.instance_id.fulfillment_export_enabled for binding in self):
+            raise UserError(self.env._("Shopify fulfillment export is disabled."))
         for binding in self:
             binding.with_delay(
                 description=self.env._(
@@ -245,6 +247,8 @@ class ShopifyFulfillment(models.Model):
                 )
 
     def action_cancel_shopify(self):
+        if any(not item.instance_id.fulfillment_export_enabled for item in self):
+            raise UserError(self.env._("Shopify fulfillment export is disabled."))
         for fulfillment in self.filtered("shopify_id"):
             fulfillment.with_delay(
                 description=self.env._(
@@ -335,7 +339,8 @@ class ShopifyInstanceFulfillmentConfiguration(models.Model):
 
     fulfillment_export_enabled = fields.Boolean(
         string="Export Fulfillments to Shopify",
-        default=True,
+        default=False,
+        copy=False,
         help=(
             "Create Shopify fulfillments when Odoo outgoing deliveries are "
             "completed. Disable this when Shopify or an external fulfillment "

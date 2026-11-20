@@ -64,6 +64,12 @@ class ShopifyInstance(models.Model):
         string="Product Field Ownership",
         copy=True,
     )
+    product_export_enabled = fields.Boolean(
+        string="Export Products to Shopify",
+        default=False,
+        copy=False,
+        help="Permit product, price and image exports. Inventory is independent.",
+    )
     product_create_if_missing = fields.Boolean(
         string="Create Missing Odoo Products",
         default=True,

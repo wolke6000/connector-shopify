@@ -633,7 +633,10 @@ class ShopifyFulfillmentOrderActions(models.Model):
     def _job_release_hold(self):
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active:
+        if (
+            not self.instance_id.active
+            or not self.instance_id.fulfillment_export_enabled
+        ):
             return False
         hold_ids = [
             hold["id"] for hold in (self.fulfillment_holds or []) if hold.get("id")
@@ -670,7 +673,10 @@ class ShopifyFulfillmentActions(models.Model):
     def _job_cancel_shopify(self):
         self = self.sudo()
         self.ensure_one()
-        if not self.instance_id.active:
+        if (
+            not self.instance_id.active
+            or not self.instance_id.fulfillment_export_enabled
+        ):
             return False
         if not self.shopify_id:
             raise ShopifyFulfillmentError(
