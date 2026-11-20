@@ -484,6 +484,8 @@ class ShopifyInstanceOrderConfig(models.Model):
     )
     auto_confirm_paid = fields.Boolean(default=True)
     auto_confirm_partially_paid = fields.Boolean(default=True)
+    # SW-OCA-002: policy cutoff distinct from payment-driven confirmation.
+    # See docs/OCA-DEVIATIONS.md.
     auto_confirm_order_date_from = fields.Datetime(
         string="Auto-confirm Orders From",
         help=(
@@ -535,6 +537,8 @@ class ShopifyInstanceOrderConfig(models.Model):
         help="Orders updated in Shopify since this timestamp are reconciled. "
         "Move it back to recheck older order updates.",
     )
+    # SW-OCA-003: persisted pending updates until successful acknowledgment.
+    # See docs/OCA-DEVIATIONS.md; reassess upstream reconciliation.
     order_drift_pending = fields.Json(
         string="Unacknowledged Shopify Order Updates",
         default=dict,
