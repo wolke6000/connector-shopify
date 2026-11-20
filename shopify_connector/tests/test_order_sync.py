@@ -2150,3 +2150,220 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertEqual(len(sale.partner_id.child_ids), child_count)
         self.assertEqual(sale.partner_shipping_id, replacement)
+
+    # Restored OCA regression coverage for discount, refunds and delivery.
+    def test_fixed_discount_over_several_units_matches_shopify_total(self):
+        payload = self._payload(order_id=30, quantity=3, total="20.00")
+        line = payload["lineItems"]["nodes"][0]
+        line["discountedUnitPriceAfterAllDiscountsSet"] = self._bag("6.67")
+        line["discountAllocations"] = [{"allocatedAmountSet": self._bag("10.00")}]
+
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(self.instance.id, payload)
+        )
+
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(binding.odoo_id.amount_total, 20)
+
+    def _refunded_before_invoice_payload(
+        self, order_id, refunded_quantity, refunded_shipping=None
+    ):
+        """Three units at 10.00, some of them refunded before any invoice.
+
+        With ``refunded_shipping``, the order also has 5.00 of shipping and
+        the refund returns that much of it.
+        """
+        remaining = 3 - refunded_quantity
+        shipping = 5 if refunded_shipping is not None else 0
+        current_shipping = shipping - (refunded_shipping or 0)
+        total = f"{remaining * 10 + current_shipping}.00"
+        payload = self._payload(
+            order_id=order_id,
+            quantity=3,
+            total=total,
+            displayFinancialStatus="PARTIALLY_REFUNDED",
+            currentShippingPriceSet=self._bag(f"{current_shipping}.00"),
+        )
+        line = payload["lineItems"]["nodes"][0]
+        line["currentQuantity"] = remaining
+        line["refundableQuantity"] = remaining
+        refund_shipping_lines = []
+        if refunded_shipping is not None:
+            payload["shippingLines"] = {
+                "nodes": [
+                    {
+                        "id": f"gid://shopify/ShippingLine/{order_id}3",
+                        "title": "Standard",
+                        "code": "standard",
+                        "originalPriceSet": self._bag(f"{shipping}.00"),
+                        # Shopify: "The current shipping price after applying
+                        # refunds, after applying discounts."
+                        "currentDiscountedPriceSet": self._bag(
+                            f"{current_shipping}.00"
+                        ),
+                        "taxLines": [],
+                    }
+                ]
+            }
+            refund_shipping_lines = [
+                {
+                    "id": f"gid://shopify/RefundShippingLine/{order_id}4",
+                    "subtotalAmountSet": self._bag(f"{refunded_shipping}.00"),
+                }
+            ]
+        refunded_total = refunded_quantity * 10 + (refunded_shipping or 0)
+        payload["refunds"] = {
+            "nodes": [
+                {
+                    "id": f"gid://shopify/Refund/{order_id}1",
+                    "createdAt": "2026-01-11T10:00:00Z",
+                    "totalRefundedSet": self._bag(f"{refunded_total}.00"),
+                    "refundLineItems": {
+                        "nodes": [
+                            {
+                                "id": f"gid://shopify/RefundLineItem/{order_id}2",
+                                "lineItem": {"id": "gid://shopify/LineItem/30"},
+                                "quantity": refunded_quantity,
+                                "restockType": "NO_RESTOCK",
+                                "subtotalSet": self._bag(
+                                    f"{refunded_quantity * 10}.00"
+                                ),
+                                "totalTaxSet": self._bag("0.00"),
+                            }
+                        ]
+                    },
+                    "refundShippingLines": {"nodes": refund_shipping_lines},
+                    "orderAdjustments": {"nodes": []},
+                    "transactions": {"nodes": []},
+                }
+            ]
+        }
+        return payload
+
+    def test_refund_before_invoice_keeps_the_current_quantity(self):
+        payload = self._refunded_before_invoice_payload(94, refunded_quantity=1)
+
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+
+        binding = self.order_model.browse(binding_id)
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(binding.odoo_id.order_line.product_uom_qty, 2)
+        self.assertEqual(binding.odoo_id.amount_total, 20)
+
+    def test_partial_refund_before_invoice_does_not_cancel_the_order(self):
+        self.instance.refund_uninvoiced_policy = "cancel"
+        payload = self._refunded_before_invoice_payload(95, refunded_quantity=2)
+
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+
+        sale_order = self.order_model.browse(binding_id).odoo_id
+        self.assertNotEqual(sale_order.state, "cancel")
+        self.assertEqual(sale_order.order_line.product_uom_qty, 1)
+
+    def test_full_refund_before_invoice_cancels_the_order(self):
+        self.instance.refund_uninvoiced_policy = "cancel"
+        payload = self._refunded_before_invoice_payload(96, refunded_quantity=3)
+
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+
+        self.assertEqual(self.order_model.browse(binding_id).odoo_id.state, "cancel")
+
+    def test_full_refund_with_shipping_before_invoice_cancels_the_order(self):
+        self.instance.refund_uninvoiced_policy = "cancel"
+        payload = self._refunded_before_invoice_payload(
+            97, refunded_quantity=3, refunded_shipping=5
+        )
+
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+
+        binding = self.order_model.browse(binding_id)
+        self.assertEqual(binding.odoo_id.state, "cancel", binding.error_message)
+
+    def _delivered(self):
+        return patch.object(type(self.order_model), "_is_delivered", return_value=True)
+
+    def test_refund_after_delivery_marked_handled_is_not_applied_again(self):
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(
+                self.instance.id, self._payload(order_id=98, quantity=3, total="30.00")
+            )
+        )
+        sale_order = binding.odoo_id
+        refunded = self._refunded_before_invoice_payload(98, refunded_quantity=1)
+        refunded["updatedAt"] = "2026-01-11T10:00:00Z"
+
+        with self._delivered():
+            with self.assertRaises(UserError):
+                binding.action_mark_handled()
+            self.assertFalse(
+                self.order_model._job_import_order(self.instance.id, refunded)
+            )
+            self.assertIn("manual resolution", binding.error_message)
+
+            with trap_jobs() as trap:
+                binding.action_mark_handled()
+            trap.assert_jobs_count(1)
+            self.assertEqual(
+                binding.handled_state,
+                {
+                    "lines": [{"id": "gid://shopify/LineItem/30", "quantity": 2}],
+                    "cancelled": False,
+                },
+            )
+            self.assertEqual(binding.handled_uid, self.env.user)
+            self.assertEqual(binding.refund_binding_ids.state, "synced")
+            # The handled refund shows its amount, as an imported one does.
+            self.assertEqual(binding.refund_binding_ids.amount, "10.00")
+            self.assertEqual(binding.refund_binding_ids.currency_id, self.currency)
+
+            result = self.order_model._job_import_order(self.instance.id, refunded)
+            self.assertTrue(result, binding.error_message)
+            self.assertEqual(binding.state, "synced")
+            # The Odoo lines stay as the person left them.
+            self.assertEqual(sale_order.order_line.product_uom_qty, 3)
+            # The line binding shows Shopify's current quantity.
+            self.assertEqual(binding.line_binding_ids.current_quantity, 2)
+            self.assertEqual(len(binding.refund_binding_ids), 1)
+
+            refunded["tags"] = ["web", "vip"]
+            refunded["updatedAt"] = "2026-01-12T10:00:00Z"
+            result = self.order_model._job_import_order(self.instance.id, refunded)
+            self.assertTrue(result, binding.error_message)
+            self.assertEqual(sale_order.shopify_tags, "web, vip")
+
+            # A new edit of the lines needs manual resolution again.
+            edited = self._refunded_before_invoice_payload(98, refunded_quantity=2)
+            edited["updatedAt"] = "2026-01-13T10:00:00Z"
+            self.assertFalse(
+                self.order_model._job_import_order(self.instance.id, edited)
+            )
+            self.assertIn("manual resolution", binding.error_message)
+            self.assertEqual(sale_order.order_line.product_uom_qty, 3)
+
+    def test_cancel_after_delivery_marked_handled_is_imported(self):
+        binding = self.order_model.browse(
+            self.order_model._job_import_order(
+                self.instance.id, self._payload(order_id=99)
+            )
+        )
+        sale_order = binding.odoo_id
+
+        with self._delivered():
+            self.assertFalse(
+                self.order_model._job_import_order(
+                    self.instance.id, self._cancelled_payload(order_id=99)
+                )
+            )
+            self.assertIn("already delivered", binding.error_message)
+            with trap_jobs():
+                binding.action_mark_handled()
+            self.assertTrue(binding.handled_state["cancelled"])
+
+            result = self.order_model._job_import_order(
+                self.instance.id, self._cancelled_payload(order_id=99)
+            )
+
+        self.assertTrue(result, binding.error_message)
+        self.assertEqual(binding.state, "synced")
+        self.assertNotEqual(sale_order.state, "cancel")
+        self.assertEqual(sale_order.order_line.product_uom_qty, 1)
