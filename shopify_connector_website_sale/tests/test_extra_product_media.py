@@ -134,8 +134,10 @@ class TestShopifyExtraProductMedia(TransactionCase):
             autospec=True,
             return_value=image_bytes,
         ):
-            sync_model._sync_images(binding_a, image_payload, [], prune=True)
-            sync_model._sync_images(binding_b, image_payload, [], prune=True)
+            # SW-OCA-012: this image has no main/variant role. Exercise the
+            # relocated extra-media path, not the core main-image path.
+            sync_model._sync_extra_images(binding_a, image_payload, [], prune=True)
+            sync_model._sync_extra_images(binding_b, image_payload, [], prune=True)
 
         image_bindings = self.env["shopify.product.image"].search(
             [
