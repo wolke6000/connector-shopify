@@ -102,6 +102,29 @@ The **five fork-only paths** also need follow-up after importing OCA:
 `field_mapping.py` and product wizard guards may call APIs whose contracts changed;
 views must load in an Odoo 19 registry with the new module layout.
 
+## Upstream regression coverage gap (unverified)
+
+An AST-level method inventory against upstream OCA `5454e91b` found that
+`test_fulfillment_sync.py`, `test_fulfillment_inbound.py` and
+`test_product_sync.py` retain all upstream test method names after the
+source merge. **This is not proof of test correctness or execution.**
+
+`test_order_sync.py` is **missing 18 upstream test/helper method names**,
+including helpers `_cancelled_payload`, `_delivered`,
+`_refunded_before_invoice_payload`, `_updated_orders_page`,
+and tests for fixed draft discounts, cancellations after delivery, refunds
+before invoicing, and drift cursor/search behavior.
+
+Do not mechanically append the old drift tests: SW-OCA-003 intentionally
+uses a durable pending ledger with different acknowledgment semantics.
+Before marking this PR ready, restore equivalent regression coverage for
+OCA order/refund/discount behavior and adapt drift tests to the ledger.
+Preserve existing Switchology tests for cleanup replay, auto-confirm cutoff,
+confirmed-order auxiliary lines and incomplete addresses.
+
+**Gate: OPEN.** An AST inventory checks function names only; it does not
+substitute for Odoo-/OCB-level execution.
+
 ## Required no-mutation guarantees
 
 For `fulfillment_export_enabled=False` / `product_export_enabled=False`:
