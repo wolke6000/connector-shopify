@@ -522,7 +522,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             )
         )
         duplicate = first.with_context(shopify_order_import=True).copy(
-            default={"shopify_is_duty": True}
+            default={"order_id": sale.id, "shopify_is_duty": True}
         )
         self.assertEqual(len(sale.order_line.filtered("shopify_is_duty")), 2)
         payload = self._two_line_payload(
@@ -562,7 +562,10 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertEqual(len(adjustment), 1)
         duplicate = adjustment.with_context(shopify_order_import=True).copy(
-            default={"shopify_line_id": adjustment.shopify_line_id}
+            default={
+                "order_id": sale.id,
+                "shopify_line_id": adjustment.shopify_line_id,
+            }
         )
         payload = self._payload(
             order_id=617,
