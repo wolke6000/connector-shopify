@@ -445,7 +445,8 @@ class ShopifyOrderSync(models.Model):
             ],
             limit=1,
         )
-        # SW-OCA-001: prevent reimport after one-off cleanup; see docs/OCA-DEVIATIONS.md.
+        # SW-OCA-001: block historical reimport after the one-off cleanup.
+        # See docs/OCA-DEVIATIONS.md.
         # Unknown historical orders, including failed legacy bindings, must not
         # be created or retried automatically. Synced bindings may be updated.
         # This shared job is invoked by webhook, bulk and drift imports.
@@ -1541,7 +1542,8 @@ class ShopifyOrderSync(models.Model):
                     ),
                 )
 
-    # SW-OCA-002: independent historical auto-confirm cutoff; see docs/OCA-DEVIATIONS.md.
+    # SW-OCA-002: independent historical auto-confirm cutoff.
+    # See docs/OCA-DEVIATIONS.md.
     def _is_after_confirmation_cutoff(self, instance, order_data):
         """Protect all automatic confirmation paths, not only payment status."""
         cutoff = instance.auto_confirm_order_date_from
