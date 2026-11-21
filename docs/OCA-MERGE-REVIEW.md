@@ -191,27 +191,27 @@ guard in code and test it **before creating a merge commit**.
 - The branch includes `test_cutover_blocks_reimport_of_deleted_historical_binding` and
   restored OCA order regressions. Odoo/OCB fresh-install CI passed at `52808357` (run
   `44824685850`). This is not the clone-upgrade test.
-- OCA source merge commit `a6293a19` is confirmed. An isolated Odoo module
-  upgrade passed on 2026-11-21; no production change is authorized.
+- OCA source merge commit `a6293a19` is confirmed. An isolated Odoo module upgrade
+  passed on 2026-11-21; no production change is authorized.
 
 ## Follow-up validation — 2026-11-21
 
-- Isolated post-cleanup schema migration passed from `19.0.1.0.3` to
-  `19.0.1.7.0` with glue-addon install; 127 media bindings and 38 variant
-  relationships survived, with constraints and ORM smoke checks.
-- Twenty-one targeted tests passed on a separate isolated Odoo 19.0-20260908
-  clone: five order/change/cancellation, six outbound fulfillment, five
-  inbound fulfillment, and five refund regressions (zero failures/errors).
-- Independent mocked product import/idempotency/image-prune/export-guard and
-  historical cutoff smoke checks passed with rollback.
-- Snapshot inventory flags and 36 opt-in variant bindings were checked;
-  one active Shopify location maps to `WH/Stock`. No live production settings
-  were read or changed during this review.
-- Draft-order periodic drift reconciliation is consciously deferred; it is
-  not asserted to be implemented or validated by these tests.
-- GitHub Actions pre-commit previously failed at `b5e7448` due to
-  formatting and Ruff findings. Formatting follow-up is in progress; only
-  a new green check on the final SHA closes that CI gate.
-- Still open: complete outbound mutation audit, review of the OCA deviations,
-  live production readiness, final-sha Odoo/OCB CI and pre-commit,
-  independent review, rollback plan, and separate deployment authorization.
+- Isolated post-cleanup schema migration passed from `19.0.1.0.3` to `19.0.1.7.0` with
+  glue-addon install; 127 media bindings and 38 variant relationships survived, with
+  constraints and ORM smoke checks.
+- Twenty-one targeted tests passed on a separate isolated Odoo 19.0-20260908 clone: five
+  order/change/cancellation, six outbound fulfillment, five inbound fulfillment, and
+  five refund regressions (zero failures/errors).
+- Independent mocked product import/idempotency/image-prune/export-guard and historical
+  cutoff smoke checks passed with rollback.
+- Snapshot inventory flags and 36 opt-in variant bindings were checked; one active
+  Shopify location maps to `WH/Stock`. No live production settings were read or changed
+  during this review.
+- Draft-order periodic drift reconciliation is consciously deferred; it is not asserted
+  to be implemented or validated by these tests.
+- GitHub Actions pre-commit previously failed at `b5e7448` due to formatting and Ruff
+  findings. Formatting follow-up is in progress; only a new green check on the final SHA
+  closes that CI gate.
+- Still open: complete outbound mutation audit, review of the OCA deviations, live
+  production readiness, final-sha Odoo/OCB CI and pre-commit, independent review,
+  rollback plan, and separate deployment authorization.
