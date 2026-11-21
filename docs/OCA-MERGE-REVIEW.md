@@ -206,18 +206,18 @@ guard in code and test it **before creating a merge commit**.
   cutoff smoke checks passed with rollback.
 - Snapshot inventory flags and 36 opt-in variant bindings were checked; one active
   Shopify location maps to `WH/Stock`. Later read-only live production preflight
-  confirmed product/customer/fulfillment exports and inventory import disabled,
-  webhook fulfillment auto-validation enabled, one active mapped location, no
-  duplicated Shopify media IDs and no pending/enqueued/started queue jobs. No
-  production settings were changed.
+  confirmed product/customer/fulfillment exports and inventory import disabled, webhook
+  fulfillment auto-validation enabled, one active mapped location, no duplicated Shopify
+  media IDs and no pending/enqueued/started queue jobs. No production settings were
+  changed.
 - Draft-order periodic drift reconciliation is consciously deferred; it is not asserted
   to be implemented or validated by these tests.
-- A source-level Shopify outbound mutation audit was completed at `3a49d51a`,
-  including product/customer/fulfillment guards, intentional Odoo-to-Shopify inventory
-  updates, and operator-triggered administrative webhook mutations. The audit does
-  not prove live behavior for old queued jobs or multi-instance configurations.
-- GitHub Actions pre-commit and Odoo/OCB tests both passed at `3a49d51a`:
-  runs `44931372890` and `44931372929` (359 tests per Odoo/OCB suite). Subsequent
+- A source-level Shopify outbound mutation audit was completed at `3a49d51a`, including
+  product/customer/fulfillment guards, intentional Odoo-to-Shopify inventory updates,
+  and operator-triggered administrative webhook mutations. The audit does not prove live
+  behavior for old queued jobs or multi-instance configurations.
+- GitHub Actions pre-commit and Odoo/OCB tests both passed at `3a49d51a`: runs
+  `44931372890` and `44931372929` (359 tests per Odoo/OCB suite). Subsequent
   documentation commits need fresh CI verification.
 - Still open: independent human review, newly introduced field defaults, deployment
   preflight, operational replay/write guards, explicit rollout/rollback planning, and
@@ -245,32 +245,32 @@ that exact SHA, not automatically to later commits.
 
 ## Production-version re-rehearsal — 2026-11-21
 
-**PASS for the cleaned production-derived snapshot `39689e91` and tested
-connector commit `3a49d51a`.** A fresh pre-upgrade PostgreSQL 15 restore and
-matching filestore were prepared on an internal Docker-only network. A separate
-pre-upgrade dump was preserved after discovering (but not installing) the new glue
-addon. Odoo's exact production **release** `19.0-20261102` was used with
-`openupgradelib==3.13.7` on AMD64; production runs ARM64. Odoo parent source
-was pinned to `7ce4eaaa`, with all four other OCA submodule commits matching
-production. This is not a byte-identical production ARM64 image test.
+**PASS for the cleaned production-derived snapshot `39689e91` and tested connector
+commit `3a49d51a`.** A fresh pre-upgrade PostgreSQL 15 restore and matching filestore
+were prepared on an internal Docker-only network. A separate pre-upgrade dump was
+preserved after discovering (but not installing) the new glue addon. Odoo's exact
+production **release** `19.0-20261102` was used with `openupgradelib==3.13.7` on AMD64;
+production runs ARM64. Odoo parent source was pinned to `7ce4eaaa`, with all four other
+OCA submodule commits matching production. This is not a byte-identical production ARM64
+image test.
 
 - The isolated core upgrade exited 0, generated zero warning/error log matches,
   installed `shopify_connector=19.0.1.7.0` and
   `shopify_connector_website_sale=19.0.1.0.0`.
-- PostgreSQL `shopify_product_image_instance_gid_unique` is actually present,
-  valid, and enforces `UNIQUE(instance_id, shopify_id)`. No duplicate media keys;
-  correct XML-ID/constraint/relation ownership; no missing or duplicate links.
+- PostgreSQL `shopify_product_image_instance_gid_unique` is actually present, valid, and
+  enforces `UNIQUE(instance_id, shopify_id)`. No duplicate media keys; correct
+  XML-ID/constraint/relation ownership; no missing or duplicate links.
 - Odoo's loaded ORM registry returned 127 Shopify image bindings, 38 image/variant
-  relations, 54 product templates, 83 variants, 85 Shopify order bindings and 79
-  sale orders.
-- A separately restored **before** checkpoint and **after** database produced
-  equal ordered row-content fingerprints for **all shared columns other than
-  `create_date`/`write_date`** across 13 tables (including orders/lines,
-  customer partners, stock quants, queue jobs, product/media bindings and instance
-  settings). Results: **13/13 PASS; 0 deviations.** Full per-table counts and
-  limits: [database migration evidence](OCA-DATABASE-UPGRADE-VALIDATION.md).
+  relations, 54 product templates, 83 variants, 85 Shopify order bindings and 79 sale
+  orders.
+- A separately restored **before** checkpoint and **after** database produced equal
+  ordered row-content fingerprints for **all shared columns other than
+  `create_date`/`write_date`** across 13 tables (including orders/lines, customer
+  partners, stock quants, queue jobs, product/media bindings and instance settings).
+  Results: **13/13 PASS; 0 deviations.** Full per-table counts and limits:
+  [database migration evidence](OCA-DATABASE-UPGRADE-VALIDATION.md).
 - Five new columns (three Shopify-order, two instance) were not included in the
   shared-column fingerprints and require separate default/semantic review.
-- No production/Shopify changes occurred. The temporary `customer_addresses=odoo`
-  policy is still **not applied to production**; a separate approved settings step
-  and release/rollback plan remain open. The PR must remain Draft until review.
+- No production/Shopify changes occurred. The temporary `customer_addresses=odoo` policy
+  is still **not applied to production**; a separate approved settings step and
+  release/rollback plan remain open. The PR must remain Draft until review.
