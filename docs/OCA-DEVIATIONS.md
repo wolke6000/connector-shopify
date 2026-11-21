@@ -148,3 +148,21 @@ successful Git merge._
   silently claim equivalent upstream draft reconciliation.
 - Remaining gates: full outbound mutation audit, independent code review, final-head
   pre-commit/Odoo/OCB, and release/rollback authorization.
+
+## Media migration edge case (2026-11-21)
+
+The older CP2A clone had 143 image bindings, 42 variant relations and seven
+cross-product repeated Shopify media IDs (20 records, 13 additional bindings).
+OCA's `UNIQUE(instance_id, shopify_id)` index failed to create during the
+first isolated upgrade, even though the Odoo process returned exit code 0.
+This is a **real schema migration failure** for that input, not a reason to
+silently delete bindings or relax the upstream constraint. Shopify inspection
+in the prior review confirmed genuine shared media IDs between separate
+products. The merchant subsequently changed Shopify media assignments.
+
+The newer `39689e91` snapshot had no repeated media IDs and its migration
+passed without connector source changes: 127 image bindings and 38 variant
+relations preserved, with correct unique index and glue-module ownership.
+This does not resolve the general cross-product-media behavior; preflight
+must reject or explicitly handle any recurrence. Document and review any
+future source-level divergence from OCA before implementing it.
