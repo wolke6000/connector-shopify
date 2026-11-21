@@ -69,22 +69,21 @@ approved.
   detection of material changes in fully populated confirmed-order addresses.
 - SW-OCA-008: UPSTREAM INTEGRATED. The incoming fulfillment engine, stock allocation,
   partial deliveries, multi-step picking and kit handling are retained from OCA.
-  Switchology still guards outgoing creation, tracking, hold release and cancellation
-  on enqueue, execution and retry. Historical order confirmation remains cutoff-gated.
-- SW-OCA-009: KEEP documented duties, rounding, unique-SKU/custom historical item
-  and zero-tax exceptions. Currency, total checks, refunds and returns use OCA.
-  Focused legacy SKU and zero-tax regressions passed with CI at `38a576c5`.
-- SW-OCA-010: The isolated production-version migration and separate five-column
-  audit passed. Release-time schema, media-index and setting checks remain mandatory.
+  Switchology still guards outgoing creation, tracking, hold release and cancellation on
+  enqueue, execution and retry. Historical order confirmation remains cutoff-gated.
+- SW-OCA-009: KEEP documented duties, rounding, unique-SKU/custom historical item and
+  zero-tax exceptions. Currency, total checks, refunds and returns use OCA. Focused
+  legacy SKU and zero-tax regressions passed with CI at `38a576c5`.
+- SW-OCA-010: The isolated production-version migration and separate five-column audit
+  passed. Release-time schema, media-index and setting checks remain mandatory.
 - SW-OCA-011: Inventory import remains disabled; its unresolved bidirectional stock
   accounting is a separate gate to enabling that feature, not a source-merge blocker.
-- HIGH-04: ACCEPTED by operational policy. Shopify owns customer invoicing; never
-  post Odoo customer invoices linked to Shopify orders.
+- HIGH-04: ACCEPTED by operational policy. Shopify owns customer invoicing; never post
+  Odoo customer invoices linked to Shopify orders.
 
-Current reviewed source/test baseline: `38a576c5`; the pre-commit and
-Odoo/OCB workflows succeeded. This is source-merge evidence, not production
-deployment approval. Independent human review and explicit merge approval remain
-required.
+Current reviewed source/test baseline: `38a576c5`; the pre-commit and Odoo/OCB workflows
+succeeded. This is source-merge evidence, not production deployment approval.
+Independent human review and explicit merge approval remain required.
 
 ## Source integration outcome (2026-11-20)
 
