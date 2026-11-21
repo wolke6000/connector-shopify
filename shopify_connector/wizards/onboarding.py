@@ -304,6 +304,17 @@ class ShopifyInstanceWizard(models.TransientModel):
 
     def action_apply_policies(self):
         self.ensure_one()
+        # SW-OCA-011: the OCA 19 available-quantity import may double-count
+        # Shopify reservations and Odoo deliveries. Onboarding cannot approve
+        # this separate stock-ownership release gate.
+        if self.inventory_direction == "bidirectional":
+            raise UserError(
+                self.env._(
+                    "Shopify-to-Odoo inventory import is not approved. "
+                    "Select Odoo to Shopify; inbound inventory needs a "
+                    "separate safety review."
+                )
+            )
         self.instance_id.write(
             {
                 "order_confirmation_policy": (self.order_confirmation_policy),
