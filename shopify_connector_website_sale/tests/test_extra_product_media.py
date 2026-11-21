@@ -117,10 +117,10 @@ class TestShopifyExtraProductMedia(TransactionCase):
             patch.object(export_class, "with_delay") as delayed,
         ):
             self.env["product.image"].create(
-                {"name": "No media upload", "product_tmpl_id": product.product_tmpl_id.id}
+                {
+                    "name": "No media upload",
+                    "product_tmpl_id": product.product_tmpl_id.id,
+                }
             )
-        self.assertEqual(
-            reached, [(self.instance.id, product.product_tmpl_id.id)]
-        )
+        self.assertEqual(reached, [(self.instance.id, product.product_tmpl_id.id)])
         delayed.assert_not_called()
-
