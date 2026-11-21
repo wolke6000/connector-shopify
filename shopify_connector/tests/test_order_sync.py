@@ -148,6 +148,64 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         payload.update(values)
         return payload
 
+    def test_legacy_variant_without_id_resolves_unique_sku(self):
+        # SW-OCA-009: preserve historical products when Shopify no longer
+        # exposes the original variant ID.
+        self.product.default_code = "SW-LEGACY-UNIQUE-94"
+        line = {
+            "gift_card": False,
+            "variant_id": False,
+            "product_id": False,
+            "sku": "SW-LEGACY-UNIQUE-94",
+        }
+        self.assertEqual(self.order_model._line_product(self.instance, line), self.product)
+
+    def test_legacy_variant_without_id_rejects_ambiguous_sku(self):
+        # Do not silently assign an order line to an arbitrary Odoo product.
+        sku = "SW-LEGACY-DUPLICATE-95"
+        self.env["product.product"].create(
+            {
+                "name": "Legacy SKU A",
+                "type": "service",
+                "company_id": self.instance.company_id.id,
+                "default_code": sku,
+            }
+        )
+        self.env["product.product"].create(
+            {
+                "name": "Legacy SKU B",
+                "type": "service",
+                "company_id": self.instance.company_id.id,
+                "default_code": sku,
+            }
+        )
+        line = {
+            "gift_card": False,
+            "variant_id": False,
+            "product_id": False,
+            "sku": sku,
+        }
+        with self.assertRaises(UserError):
+            self.order_model._line_product(self.instance, line)
+
+    def test_legacy_custom_line_uses_named_fallback_product(self):
+        # Only lines without variant, product and SKU can use this fallback.
+        custom = self.env["product.product"].create(
+            {
+                "name": "Legacy Shopify Custom Line",
+                "type": "service",
+                "company_id": self.instance.company_id.id,
+                "default_code": "SHOPIFY-LEGACY-CUSTOM",
+            }
+        )
+        line = {
+            "gift_card": False,
+            "variant_id": False,
+            "product_id": False,
+            "sku": "",
+        }
+        self.assertEqual(self.order_model._line_product(self.instance, line), custom)
+
     def _cancelled_payload(self, order_id, **values):
         """Return the Shopify payload after cancellation.
 
