@@ -243,7 +243,15 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertFalse(old_address.active)
 
     def test_customer_address_update_preserves_confirmed_order_address(self):
-        # A Shopify address may be edited after an order used its old values.
+        # Shopify-owned addresses may be edited after an order used old values.
+        self.env["shopify.field.mapping"].create(
+            {
+                "instance_id": self.instance.id,
+                "field": "customer_addresses",
+                "owner": "shopify",
+            }
+        )
+
         def address(street):
             return {
                 "id": "gid://shopify/MailingAddress/890",
