@@ -84,11 +84,10 @@ document.
 
 ## Isolated snapshot observation (2026-11-21)
 
-An isolated production-derived database snapshot showed
-`inventory_import_enabled=False` on the active instance. Product export,
-customer export, and fulfillment export were also disabled. There were
-22 opt-in product bindings and 36 opt-in tracked variants, no tested
-parent-binding/instance inconsistencies, and one active mapped Shopify
-location associated with the internal Odoo `WH/Stock` location.
-This observation **does not** prove the live production flags or establish
-that inbound inventory import is safe. The independent import gate remains open.
+An isolated production-derived database snapshot showed `inventory_import_enabled=False`
+on the active instance. Product export, customer export, and fulfillment export were
+also disabled. There were 22 opt-in product bindings and 36 opt-in tracked variants, no
+tested parent-binding/instance inconsistencies, and one active mapped Shopify location
+associated with the internal Odoo `WH/Stock` location. This observation **does not**
+prove the live production flags or establish that inbound inventory import is safe. The
+independent import gate remains open.
