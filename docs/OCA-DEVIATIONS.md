@@ -8,8 +8,8 @@
 > 188 behind upstream; 25 files differed. Update these references after each upstream
 > integration or meaningful policy change. Integration merge commit:
 > `a6293a1974a3db62a74023b5b91930aca8f50155` (parents: integration branch `369d90b0` and
-> OCA `5454e91b`). This is a **source integration only**, not a deployed or tested
-> schema upgrade. The isolated 2026-11-21 migration passed; production rollout remains
+> OCA `5454e91b`). This source integration has now passed an isolated
+> 2026-11-21 schema upgrade; it is not deployed. The isolated 2026-11-21 migration passed; production rollout remains
 > separate. Post-merge diff against OCA has to be reviewed after follow-up fixes;
 > do not interpret the baseline 25-file inventory as the final difference count.
 
@@ -67,8 +67,8 @@ approved.
   regions). The remaining overlapping paths merged automatically. The decision log is
   `docs/OCA-MERGE-REVIEW.md`.
 - The OCA media glue module `shopify_connector_website_sale` and the upstream
-  pre-migration were added to source. No actual database upgrade or migration has been
-  performed.
+  pre-migration were added to source. An isolated 2026-11-21 database upgrade
+  passed; production has not been changed.
 - `SW-OCA-004` and `SW-OCA-005` are retained as explicit outbound write safeguards.
   Newly introduced OCA missed-fulfillment and tracking mutation paths are guarded for
   disabled exports; regression verification is still required.
