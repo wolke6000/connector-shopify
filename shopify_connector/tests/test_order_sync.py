@@ -158,7 +158,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             "product_id": False,
             "sku": "SW-LEGACY-UNIQUE-94",
         }
-        self.assertEqual(self.order_model._line_product(self.instance, line), self.product)
+        self.assertEqual(
+            self.order_model._line_product(self.instance, line), self.product
+        )
 
     def test_legacy_variant_without_id_rejects_ambiguous_sku(self):
         # Do not silently assign an order line to an arbitrary Odoo product.
