@@ -1,7 +1,7 @@
 # OCA 19.0 integration: three-way merge review and release gates
 
-**Status:** two-parent OCA merge committed in draft integration branch; functional and
-database-upgrade review pending. **Updated:** 2026-11-21.
+**Status:** source integration and isolated database upgrade verified; PR remains Draft
+pending independent human review and final-head CI. **Updated:** 2026-11-21.
 
 | Revision                        | Commit                                                                      |
 | ------------------------------- | --------------------------------------------------------------------------- |
@@ -269,8 +269,75 @@ image test.
   partners, stock quants, queue jobs, product/media bindings and instance settings).
   Results: **13/13 PASS; 0 deviations.** Full per-table counts and limits:
   [database migration evidence](OCA-DATABASE-UPGRADE-VALIDATION.md).
-- Five new columns (three Shopify-order, two instance) were not included in the
-  shared-column fingerprints and require separate default/semantic review.
+- Five new columns (three Shopify-order, two instance) were independently checked:
+  85/85 Shopify orders have NULL `handled_state`, `handled_date`, and `handled_uid`;
+  the active instance has `draft_order_import_enabled=True` and
+  `order_use_shopify_name=NULL` (ORM-false). All five column types were verified.
 - No production/Shopify changes occurred. The temporary `customer_addresses=odoo` policy
   is still **not applied to production**; a separate approved settings step and
   release/rollback plan remain open. The PR must remain Draft until review.
+
+## Final PR merge gate audit — 2026-11-21
+
+**Scope:** PR #17 is a source merge, not permission to deploy. The integration
+branch targets `19.0`.
+
+### Completed technical evidence
+
+- Genuine two-parent OCA merge; conflict and overlap review recorded above.
+- Production-release-equivalent Odoo `19.0-20261102` isolated migration PASS
+  with `shopify_connector_website_sale`, valid media uniqueness index,
+  127 image bindings, 38 variant links, and 13/13 data fingerprints.
+- All five added database fields and effective initial values reviewed;
+  no mismatch found in the isolated migrated instance.
+- Odoo/OCB and pre-commit PASSED at source/test commit `38a576c5`:
+  tests run `44953553379`, pre-commit run `44953553373`.
+- SW-OCA-003 retains the durable pending ledger instead of replacing it
+  with upstream's unacknowledged queue cursor. Draft-order periodic drift
+  remains intentionally deferred.
+- SW-OCA-006 retains confirmed-order auxiliary lines rather than unlinking;
+  tests cover removal, restoration and duplicate cleanup.
+- SW-OCA-007 protects historical incomplete addresses and rejects material
+  address drift on confirmed orders. The temporary customer-address ownership
+  change is a separate authorized release step.
+- SW-OCA-008 uses upstream inbound fulfillment allocation with preserved
+  historical cutoff, unmapped-line rejection, carrier-booking suppression
+  and separate outbound export guards. Tests cover partial deliveries,
+  backorders, kits, retries and existing queued export jobs.
+- SW-OCA-009 keeps limited duties, rounding, historical SKU/custom product
+  and zero-amount tax exceptions. Dedicated SKU/custom and tax regressions
+  passed at `38a576c5`. Currency, refund, credit-note and return methods
+  match upstream; HIGH-04 follows the accepted Shopify-only invoicing rule.
+- SW-OCA-011 remains an intentionally disabled inventory-import feature.
+  Its double-counting concern blocks enabling inbound inventory imports,
+  not merging the guarded connector source.
+
+### Remaining PR source-merge gates
+
+- **Final-head CI:** check pre-commit and Odoo/OCB on the last documentation
+  commit. Historical green runs apply only to their own SHA.
+- **Independent human review:** a responsible reviewer must approve the
+  final diff, security-sensitive Shopify mutation guards, operational
+  assumptions and recorded deviations.
+- **Workflow divergence:** the fork retains its existing GitHub Actions
+  workflow files. This infrastructure difference should be reviewed
+  by the merge owner.
+- **PR state:** retain Draft until the owner confirms these gates.
+  No automated merge is authorized.
+
+### Separate production release gates
+
+- Explicit deployment authorization, change window and rollback procedure.
+- Fresh database/filestore backup, media uniqueness preflight, job/cron
+  state, submodule pin and matching release compatibility.
+- Verify customer, product and fulfillment export flags; disabled inbound
+  inventory import; stock export opt-ins and mapped locations.
+- Apply temporary `customer_addresses=odoo` with customer exports
+  disabled; confirm no posted Odoo invoices on Shopify-linked orders.
+- Validate migrated schema, image index, registry, stock/order/media
+  integrity and controlled order/fulfillment replay before enabling jobs.
+- Roll back application, database and filestore together if necessary;
+  reconcile any external Shopify writes separately.
+
+No production services, Shopify settings or Odoo submodule pins are
+changed by this review.
