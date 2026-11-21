@@ -236,6 +236,66 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             2,
         )
 
+    def test_cutover_retries_previously_synced_old_order_after_error(self):
+        # SW-OCA-001: transient failure must not revoke a successful binding.
+        original = self._payload(order_id=908)
+        binding_id = self.order_model._job_import_order(self.instance.id, original)
+        binding = self.order_model.browse(binding_id)
+        self.assertEqual(binding.state, "synced")
+        self.assertTrue(binding.odoo_id)
+        self.assertTrue(binding.payload_digest)
+
+        self.instance.order_import_date_from = "2026-02-01"
+        changed = self._payload(
+            order_id=908,
+            quantity=2,
+            total="20.00",
+            updatedAt="2026-11-10T10:00:00Z",
+        )
+        with patch.object(
+            type(self.order_model), "_build_order", side_effect=ValueError("temporary")
+        ):
+            self.assertFalse(self.order_model._job_import_order(self.instance.id, changed))
+        self.assertEqual(binding.state, "error")
+        self.assertTrue(binding.odoo_id)
+        self.assertTrue(binding.payload_digest)
+
+        self.assertEqual(
+            self.order_model._job_import_order(self.instance.id, changed), binding_id
+        )
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(binding.odoo_id.order_line.product_uom_qty, 2)
+
+    def test_cutover_drift_requeues_previously_synced_old_order_in_error(self):
+        original = self._payload(order_id=909)
+        binding_id = self.order_model._job_import_order(self.instance.id, original)
+        binding = self.order_model.browse(binding_id)
+        binding.state = "error"
+        self.instance.order_import_date_from = "2026-02-01"
+        self.instance.order_drift_since = datetime(2026, 11, 8)
+        gid = "gid://shopify/Order/909"
+        client = Mock()
+        client.execute.return_value = {
+            "orders": {
+                "nodes": [
+                    {
+                        "id": gid,
+                        "name": "#909",
+                        "createdAt": "2026-01-10T10:00:00Z",
+                        "updatedAt": "2026-11-10T10:00:00Z",
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
+        with (
+            trap_jobs() as trap,
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+        ):
+            self.assertEqual(self.instance._job_sync_updated_orders(), 1)
+        trap.assert_jobs_count(1, only=self.order_model._job_import_order_from_api)
+        self.assertIn(gid, self.instance.order_drift_pending)
+
     def test_cutover_does_not_retry_failed_old_order(self):
         self.assertFalse(
             self.order_model._job_import_order(
