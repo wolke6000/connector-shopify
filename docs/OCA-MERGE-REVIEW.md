@@ -210,30 +210,28 @@ guard in code and test it **before creating a merge commit**.
 - Draft-order periodic drift reconciliation is consciously deferred; it is not asserted
   to be implemented or validated by these tests.
 - GitHub Actions pre-commit previously failed at `b5e7448` due to formatting and Ruff
-  findings. Pre-commit and Odoo/OCB CI later passed at `0ad91446`; a new
-  commit requires its own checks.
+  findings. Pre-commit and Odoo/OCB CI later passed at `0ad91446`; a new commit requires
+  its own checks.
 - Still open: complete outbound mutation audit, review of the OCA deviations, live
   production readiness, final-sha Odoo/OCB CI and pre-commit, independent review,
   rollback plan, and separate deployment authorization.
 
 ## Additional migration-history evidence
 
-The earlier CP2A migration rehearsal **failed** schema acceptance: 143 image
-bindings and 42 image/variant links existed, with seven media IDs shared across
-five separate Shopify products. OCA's new unique index on
-`(instance_id, shopify_id)` could not be created, although Odoo exited 0.
-The old fork index also included `template_binding_id`. This was not a
-missing-media or lost-binding issue, and must not be described as a successful
-migration. The media assignments were subsequently changed in Shopify.
+The earlier CP2A migration rehearsal **failed** schema acceptance: 143 image bindings
+and 42 image/variant links existed, with seven media IDs shared across five separate
+Shopify products. OCA's new unique index on `(instance_id, shopify_id)` could not be
+created, although Odoo exited 0. The old fork index also included `template_binding_id`.
+This was not a missing-media or lost-binding issue, and must not be described as a
+successful migration. The media assignments were subsequently changed in Shopify.
 
-The successfully migrated `39689e91` production-derived snapshot was a
-**different, later input**: 79 sale orders, 85 Shopify order bindings, 127
-media bindings, 38 variant relationships and zero shared media keys before
-upgrade. All 127/38 survived; the intended OCA index and module ownership
-were verified. The successful test does not establish that arbitrary legacy
-stores containing shared media IDs can upgrade unchanged. Preflight and
-postflight checks for the unique index are release-critical.
+The successfully migrated `39689e91` production-derived snapshot was a **different,
+later input**: 79 sale orders, 85 Shopify order bindings, 127 media bindings, 38 variant
+relationships and zero shared media keys before upgrade. All 127/38 survived; the
+intended OCA index and module ownership were verified. The successful test does not
+establish that arbitrary legacy stores containing shared media IDs can upgrade
+unchanged. Preflight and postflight checks for the unique index are release-critical.
 
-At commit `0ad9144654f439502e25fe451a2b1286d5947f4b`, GitHub Actions
-pre-commit (run 44906525072) and Odoo/OCB tests (run 44906525078) passed.
-This CI result applies to that exact SHA, not automatically to later commits.
+At commit `0ad9144654f439502e25fe451a2b1286d5947f4b`, GitHub Actions pre-commit
+(run 44906525072) and Odoo/OCB tests (run 44906525078) passed. This CI result applies to
+that exact SHA, not automatically to later commits.
