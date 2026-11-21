@@ -242,19 +242,20 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertEqual(len(binding.address_binding_ids), 1)
         self.assertFalse(old_address.active)
 
-    def test_customer_address_update_preserves_confirmed_order_address(self):
-        # Shopify-owned addresses may be edited after an order used old values.
+    def test_odoo_owned_customer_address_preserves_confirmed_order_address(self):
+        # Explicit Odoo ownership protects historical order addresses from later
+        # Shopify customer MailingAddress changes, without a fork patch.
         mapping = self.instance.field_mapping_ids.filtered(
             lambda item: item.field == "customer_addresses"
         )
         if mapping:
-            mapping.owner = "shopify"
+            mapping.owner = "odoo"
         else:
             self.env["shopify.field.mapping"].create(
                 {
                     "instance_id": self.instance.id,
                     "field": "customer_addresses",
-                    "owner": "shopify",
+                    "owner": "odoo",
                 }
             )
 
@@ -309,10 +310,8 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertEqual(order.partner_shipping_id, old_address)
         self.assertEqual(old_address.street, "Old Street 1")
         self.assertEqual(order.partner_invoice_id.street, "Old Street 1")
-        self.assertEqual(
-            binding.address_binding_ids.odoo_id.street, "New Street 2"
-        )
-        self.assertNotEqual(binding.address_binding_ids.odoo_id, old_address)
+        self.assertEqual(binding.address_binding_ids.odoo_id.street, "Old Street 1")
+        self.assertEqual(binding.address_binding_ids.odoo_id, old_address)
 
     def test_tags_create_company_scoped_categories_without_duplicates(self):
         payload = self._payload(5, tags=["VIP", "Wholesale"])
