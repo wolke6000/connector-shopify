@@ -1,9 +1,10 @@
 # OCA 19.0 connector upgrade — isolated database validation
 
-**Release gate: OPEN (production deployment).** On 2026-11-21 an isolated,
-network-restricted post-cleanup database clone was upgraded using the PR source; image
-bindings and variant relations were preserved. No production database upgrade or restore
-was performed. Fresh-install CI is not migration evidence.
+**Database migration gate: PASSED for the cleaned `39689e91` snapshot with the
+production Odoo version `19.0-20261102` (2026-11-21). Production release gate: OPEN.**
+The isolated upgrade preserved the tested records, relations and configuration. No
+production database upgrade or restore was performed. CI and an Odoo exit code alone
+are not database migration evidence.
 
 ## Scope
 
@@ -158,7 +159,95 @@ backup, rehearsed restore, explicit downtime/queue policy, and independent revie
 not change the Odoo submodule gitlink or production services as part of this
 validation.**
 
-## Isolated validation evidence — 2026-11-21
+## Production-version migration rehearsal — 2026-11-21 (PASS)
+
+This is a **new, independent upgrade of the pre-migration database**, not an ORM
+check of the already migrated September test database.
+
+- **Source:** Restic snapshot `39689e91`, captured 2026-11-21 at 09:25
+  Europe/Vienna. Its pre-upgrade dump and matching filestore were copied and
+  SHA256-verified locally; a separate immutable `pg_dump -Fc` checkpoint was
+  retained after discovering the glue addon and before upgrading.
+- **Reproducibility:** Production Odoo repository commit
+  `7ce4eaaa57f2347e148ed3b20baa32494079b4b0`, installed connector gitlink
+  `33a308f9774eba7fcc4bf3634397dbe873f0caec`, and tested PR source
+  `3a49d51a09c8c123a8006a320c5faca27c6ae7db`. The four other OCA addon
+  submodules matched their production pins. The new Odoo test image used the
+  production-pinned multi-architecture Odoo base digest, its **AMD64**
+  `19.0-20261102` variant, and `openupgradelib==3.13.7`; production itself
+  runs ARM64. This matches the Odoo release and dependency version, **not the
+  exact production ARM64 image binary**.
+- **Isolation:** Local PostgreSQL 15, an internal-only Docker network
+  (`Internal=true`), no public Odoo endpoint, no outbound Shopify access,
+  `ODOO_QUEUE_JOB_CHANNELS=root:0`, `workers=0`, and
+  `max_cron_threads=0`. No production or Shopify writes were performed.
+- **Pre-upgrade clone:** `switchology_pr17_prodversion` had
+  `shopify_connector=19.0.1.0.3`, 127 image bindings with 127 distinct Shopify
+  media IDs, 38 image/variant relation rows, and 85 Shopify order bindings.
+  After an Odoo module-list refresh, `shopify_connector_website_sale` was
+  `uninstalled` and discoverable; its state was not edited manually.
+- **Upgrade execution:** Isolated Odoo
+  `--stop-after-init --no-http --workers=0 --max-cron-threads=0 -u shopify_connector`
+  exited 0. The captured upgrade log had 54 lines and **zero**
+  warning/error/traceback matches. Post-upgrade modules:
+  `shopify_connector=19.0.1.7.0` and
+  `shopify_connector_website_sale=19.0.1.0.0`, both installed.
+- **Actual PostgreSQL schema:** The validated
+  `shopify_product_image_instance_gid_unique` constraint and physical unique
+  index both enforce `UNIQUE(instance_id, shopify_id)`. Zero duplicate media
+  keys. The image/variant relation belongs to
+  `shopify_connector_website_sale`; the two binding-mixin constraints remain
+  owned by `shopify_connector`. Image-related XML-ID owner counts were 5 core,
+  28 glue, and 19 `website_sale` entries.
+- **Relationship integrity:** All 127 image bindings and 38 image/variant
+  relations remained. There were zero orphaned image, template, variant, or
+  many-to-many links and zero duplicate many-to-many links. An isolated Odoo ORM
+  registry load passed with 54 Shopify product-template bindings, 83 variants,
+  85 order bindings, 79 `sale.order` records, 127 image bindings, and 38
+  ORM image/variant relations.
+- **Exact before/after data comparison:** Restored the separate
+  pre-upgrade checkpoint as `switchology_pr17_before_audit`. Deterministic
+  SQL fingerprints of **all shared columns except `create_date` and
+  `write_date`** matched for all 13 tables below. Fingerprints were
+  ordered by stable primary/relationship keys and included complete row
+  contents; no customer data or tokens were published.
+
+| Table | Before | After | Shared columns | New columns | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `shopify_product_image` | 127 | 127 | 14 | 0 | PASS |
+| `shopify_product_image_variant_rel` | 38 | 38 | 2 | 0 | PASS |
+| `shopify_product_template` | 54 | 54 | 18 | 0 | PASS |
+| `shopify_product_variant` | 83 | 83 | 20 | 0 | PASS |
+| `shopify_order` | 85 | 85 | 46 | 3 | PASS |
+| `sale_order` | 79 | 79 | 61 | 0 | PASS |
+| `sale_order_line` | 490 | 490 | 51 | 0 | PASS |
+| `shopify_instance` | 1 | 1 | 54 | 2 | PASS |
+| `shopify_field_mapping` | 9 | 9 | 6 | 0 | PASS |
+| `queue_job` | 16,543 | 16,543 | 33 | 0 | PASS |
+| `stock_quant` | 561 | 561 | 18 | 0 | PASS |
+| `account_move` | 0 | 0 | 73 | 0 | PASS |
+| `res_partner` | 1,504 | 1,504 | 85 | 0 | PASS |
+
+**Result:** The **database migration gate is PASSED for this cleaned snapshot**
+and this pinned source/Odoo combination. The 16,543 queue jobs remained
+unchanged (16,504 done, 39 cancelled), and the shared instance settings
+remained unchanged: product/customer/fulfillment export and inventory import
+disabled, webhook fulfillment auto-validation enabled, unreserved delivery
+validation disabled, invoicing policy `manual`.
+
+**Limits and release gates:** Five newly introduced columns (three in
+`shopify_order`, two in `shopify_instance`) were not included in the
+before/after common-column fingerprints; verify their defaults and semantics
+separately. Time-stamp changes were excluded. This is not a live Shopify
+mutation test, complete business-regression review, or a production rollback
+rehearsal. The live `customer_addresses` field mapping was still
+`owner=shopify` in the separate read-only production preflight; the agreed
+temporary `owner=odoo` policy with `customer_export_enabled=False` is
+**not yet applied**. Recheck duplicate Shopify media IDs, relevant queue state,
+and export/inventory settings immediately before any approved production
+upgrade. Keep the PR in draft until independent review and release approval.
+
+## Earlier isolated validation evidence — 2026-11-21 (Odoo 19.0-20260908)
 
 - Tested an isolated PostgreSQL clone, with an internal-only Docker network, read-only
   source filestore, no external Shopify access, and disabled queue/crons.
@@ -178,8 +267,9 @@ validation.**
   internal `WH/Stock`.
 - These are **snapshot** observations, not verification of live production configuration
   or a full independent security review.
-- Current PR-head CI, outbound mutation audit, release rollback plan, and production
-  deployment approval are still separate gates.
+- Current-head CI and a source-level outbound mutation audit later passed at
+  `3a49d51a`; independent review, operational safeguards, rollout/rollback
+  planning, and production deployment approval remain separate gates.
 
 ## Failed first rehearsal and corrected source snapshot
 
