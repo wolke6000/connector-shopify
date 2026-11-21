@@ -288,6 +288,8 @@ class ShopifyInstanceInventoryConfig(models.Model):
     inventory_import_enabled = fields.Boolean(
         string="Import Shopify Inventory",
         default=False,
+        # SW-OCA-011: a copied store must not inherit a risky import opt-in.
+        copy=False,
         help=("Apply inventory_levels/update webhooks to mapped Odoo locations."),
     )
     inventory_quantity_basis = fields.Selection(

@@ -25,6 +25,7 @@ ADDRESS_FIELDS = """
 ORDER_FIELDS = f"""
     id
     name
+    number
     createdAt
     updatedAt
     cancelledAt
@@ -224,7 +225,7 @@ def orders_bulk_query(
 
 
 def orders_updated_search(since: datetime) -> str:
-    """Build a UTC search filter for orders updated after the given timestamp."""
+    """Build the search filter for the orders updated since a UTC datetime."""
     if since.tzinfo:
         since = since.astimezone(timezone.utc).replace(tzinfo=None)
     return f"updated_at:>='{since.replace(microsecond=0).isoformat()}Z'"
@@ -254,6 +255,10 @@ DRAFT_ORDER_FIELDS = f"""
     billingAddress {{ {ADDRESS_FIELDS} }}
     order {{ id }}
     discountCodes
+    appliedDiscount {{
+      title
+      amountSet {{ {MONEY_FIELDS} }}
+    }}
     subtotalPriceSet {{ {MONEY_FIELDS} }}
     totalDiscountsSet {{ {MONEY_FIELDS} }}
     totalShippingPriceSet {{ {MONEY_FIELDS} }}
