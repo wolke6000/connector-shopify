@@ -262,21 +262,21 @@ Compared the PR integration branch with OCA commit `5454e91b`:
 - `lib/order.py` adds normalization of Shopify `currentTotalDutiesSet`;
   `graphql/order.py` requests that field plus `createdAt` in updated-order search.
   Duties feed technical order adjustment lines and the historical creation-date guard.
-- `models/order_sync.py` retains duty and subtotal adjustment lines, including
-  the single-minor-unit cap for no-discount rounding. Existing regressions cover
-  adjustment creation, removal, confirmed-order safety and the no-discount cap.
-- Legacy product resolution adds fallback by a *unique* Odoo SKU when Shopify has
-  no variant ID, plus `SHOPIFY-LEGACY-CUSTOM` when product ID, variant ID and SKU
-  are all absent. These paths are not established as equivalent to OCA.
-- Zero-amount Shopify tax lines are ignored before rate mapping. This is a
-  distinct behavior from upstream and needs a focused regression / policy review.
+- `models/order_sync.py` retains duty and subtotal adjustment lines, including the
+  single-minor-unit cap for no-discount rounding. Existing regressions cover adjustment
+  creation, removal, confirmed-order safety and the no-discount cap.
+- Legacy product resolution adds fallback by a _unique_ Odoo SKU when Shopify has no
+  variant ID, plus `SHOPIFY-LEGACY-CUSTOM` when product ID, variant ID and SKU are all
+  absent. These paths are not established as equivalent to OCA.
+- Zero-amount Shopify tax lines are ignored before rate mapping. This is a distinct
+  behavior from upstream and needs a focused regression / policy review.
 - The order-cancellation branch duplicated the already available upstream
-  `_cancel_sale_order` helper. Commit `497c396b` reuses that helper without
-  changing the intended cancellation behavior.
+  `_cancel_sale_order` helper. Commit `497c396b` reuses that helper without changing the
+  intended cancellation behavior.
 
-**Open before closing SW-OCA-009:** Add or identify focused regressions for
-legacy SKU/custom product selection and zero-value taxes; verify company and
-instance boundaries, missing or ambiguous SKU behavior, and that ignoring
-zero-value tax lines does not hide a material tax mismatch. Complete the
-source-level review of the remaining payment, refund and currency paths.
-Do not remove these fallbacks just to reduce the fork diff without evidence.
+**Open before closing SW-OCA-009:** Add or identify focused regressions for legacy
+SKU/custom product selection and zero-value taxes; verify company and instance
+boundaries, missing or ambiguous SKU behavior, and that ignoring zero-value tax lines
+does not hide a material tax mismatch. Complete the source-level review of the remaining
+payment, refund and currency paths. Do not remove these fallbacks just to reduce the
+fork diff without evidence.
