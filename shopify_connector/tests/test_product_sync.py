@@ -1,4 +1,3 @@
-import base64
 from unittest.mock import Mock, patch
 
 import psycopg2
