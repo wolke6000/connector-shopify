@@ -1219,6 +1219,23 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(binding.missing_tax_rate, "0.1")
         self.assertTrue(binding.missing_tax_country_id)
 
+    def test_zero_amount_tax_line_does_not_require_tax_mapping(self):
+        # SW-OCA-009: mirror Shopify's zero tax rather than applying a
+        # nonzero Odoo tax solely because a rate was included in the payload.
+        payload = self._payload(order_id=94, total="10.00")
+        payload["shippingAddress"] = {"countryCodeV2": "US"}
+        payload["lineItems"]["nodes"][0]["taxLines"] = [
+            {"title": "Zero amount tax", "rate": "0.1", "priceSet": self._bag("0.00")}
+        ]
+
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+
+        self.assertTrue(binding_id)
+        binding = self.order_model.browse(binding_id)
+        self.assertEqual(binding.state, "synced")
+        self.assertEqual(binding.odoo_id.amount_total, 10.0)
+        self.assertFalse(binding.odoo_id.order_line.tax_ids)
+
     def _austin_payload(self, order_id):
         # Austin, TX: state 6.25 %, city 1 %, transit 1 %.
         payload = self._payload(order_id=order_id, total="108.25")
