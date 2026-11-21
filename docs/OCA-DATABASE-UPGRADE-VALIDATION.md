@@ -1,9 +1,9 @@
 # OCA 19.0 connector upgrade — isolated database validation
 
 **Release gate: OPEN (production deployment).** On 2026-11-21 an isolated,
-network-restricted post-cleanup database clone was upgraded using the PR source;
-image bindings and variant relations were preserved. No production database
-upgrade or restore was performed. Fresh-install CI is not migration evidence.
+network-restricted post-cleanup database clone was upgraded using the PR source; image
+bindings and variant relations were preserved. No production database upgrade or restore
+was performed. Fresh-install CI is not migration evidence.
 
 ## Scope
 
@@ -160,23 +160,23 @@ validation.**
 
 ## Isolated validation evidence — 2026-11-21
 
-- Tested an isolated PostgreSQL clone, with an internal-only Docker network,
-  read-only source filestore, no external Shopify access, and disabled queue/crons.
-- `shopify_connector` upgrade from `19.0.1.0.3` to `19.0.1.7.0`
-  succeeded, including the `shopify_connector_website_sale` addon.
-- Verified preservation of 127 image bindings and 38 image/variant
-  relationships; module registry, constraints, and ORM binding checks passed.
-- A separate test-database clone (`switchology_pr17_tests`) passed 21 selected
-  Odoo 19.0-20260908 regressions: five order/cancellation cases, six outbound
-  fulfillment guards, five inbound fulfillment cases, and five refunds.
-- Product import/reimport idempotency, image pruning, product export guards,
-  and historical order cutoff passed an isolated mocked/rollback smoke test.
-- A read-only snapshot inventory inspection found instance 1 with inventory
-  import, product export, customer export, and fulfillment export disabled;
-  22 of 54 product bindings and 36 of 83 variant bindings opted into inventory
-  sync. All 36 were tracked; no tested cross-instance or parent mismatch;
-  one active Shopify location mapped to internal `WH/Stock`.
-- These are **snapshot** observations, not verification of live production
-  configuration or a full independent security review.
-- Current PR-head CI, outbound mutation audit, release rollback plan, and
-  production deployment approval are still separate gates.
+- Tested an isolated PostgreSQL clone, with an internal-only Docker network, read-only
+  source filestore, no external Shopify access, and disabled queue/crons.
+- `shopify_connector` upgrade from `19.0.1.0.3` to `19.0.1.7.0` succeeded, including the
+  `shopify_connector_website_sale` addon.
+- Verified preservation of 127 image bindings and 38 image/variant relationships; module
+  registry, constraints, and ORM binding checks passed.
+- A separate test-database clone (`switchology_pr17_tests`) passed 21 selected Odoo
+  19.0-20260908 regressions: five order/cancellation cases, six outbound fulfillment
+  guards, five inbound fulfillment cases, and five refunds.
+- Product import/reimport idempotency, image pruning, product export guards, and
+  historical order cutoff passed an isolated mocked/rollback smoke test.
+- A read-only snapshot inventory inspection found instance 1 with inventory import,
+  product export, customer export, and fulfillment export disabled; 22 of 54 product
+  bindings and 36 of 83 variant bindings opted into inventory sync. All 36 were tracked;
+  no tested cross-instance or parent mismatch; one active Shopify location mapped to
+  internal `WH/Stock`.
+- These are **snapshot** observations, not verification of live production configuration
+  or a full independent security review.
+- Current PR-head CI, outbound mutation audit, release rollback plan, and production
+  deployment approval are still separate gates.
