@@ -212,7 +212,11 @@ class ShopifyInstanceOrderSync(models.Model):
                 [
                     ("instance_id", "=", self.id),
                     ("shopify_id", "in", [order["id"] for order in orders]),
+                    "|",
                     ("state", "=", "synced"),
+                    "&",
+                    ("odoo_id", "!=", False),
+                    ("payload_digest", "!=", False),
                 ]
             )
             .mapped("shopify_id")
@@ -534,12 +538,17 @@ class ShopifyOrderSync(models.Model):
         )
         # SW-OCA-001: block historical reimport after the one-off cleanup.
         # See docs/OCA-DEVIATIONS.md.
-        # Unknown historical orders, including failed legacy bindings, must not
-        # be created or retried automatically. Synced bindings may be updated.
+        # Unknown historical orders and bindings that never synchronized
+        # successfully must not be created or retried automatically.
+        # A persisted Odoo order plus success digest permits recovery after
+        # a temporary import error, without reviving deleted historical orders.
         # This shared job is invoked by webhook, bulk and drift imports.
+        previously_synced = bool(
+            binding and binding.odoo_id and binding.payload_digest
+        )
         cutoff = instance.order_import_date_from
         created_at = _utc_datetime(order_data.get("created_at"))
-        if (not binding or binding.state != "synced") and (
+        if not (binding and (binding.state == "synced" or previously_synced)) and (
             not cutoff or not created_at or created_at.date() < cutoff
         ):
             return False
