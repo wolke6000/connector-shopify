@@ -255,7 +255,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         with patch.object(
             type(self.order_model), "_build_order", side_effect=ValueError("temporary")
         ):
-            self.assertFalse(self.order_model._job_import_order(self.instance.id, changed))
+            self.assertFalse(
+                self.order_model._job_import_order(self.instance.id, changed)
+            )
         self.assertEqual(binding.state, "error")
         self.assertTrue(binding.odoo_id)
         self.assertTrue(binding.payload_digest)
