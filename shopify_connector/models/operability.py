@@ -51,8 +51,28 @@ class ShopifyBindingOperations(models.AbstractModel):
         self.write({"state": "pending", "error_message": False})
         return True
 
+    def _shopify_retry_blocked_by_export_policy(self):
+        # SW-OCA-005: an Odoo-origin fulfillment without a Shopify ID
+        # retries a Shopify write, not a read-only fulfillment refresh.
+        self.ensure_one()
+        return (
+            self._name == "shopify.fulfillment"
+            and self.origin == "odoo"
+            and not self.shopify_id
+            and self.picking_id
+            and not self.instance_id.fulfillment_export_enabled
+        )
+
     def action_retry_sync(self):
         failed = self.filtered(lambda binding: binding.state == "error")
+        # SW-OCA-005: reject before resetting any binding's error state.
+        if any(binding._shopify_retry_blocked_by_export_policy() for binding in failed):
+            raise UserError(
+                self.env._(
+                    "Shopify fulfillment export is disabled. "
+                    "Cannot retry an outgoing delivery."
+                )
+            )
         failed.write({"state": "pending", "error_message": False})
         for binding in failed:
             binding._shopify_enqueue_fresh_retry()
@@ -83,6 +103,13 @@ class ShopifyBindingOperations(models.AbstractModel):
 
     def _shopify_enqueue_fresh_retry(self):  # noqa: C901
         self.ensure_one()
+        if self._shopify_retry_blocked_by_export_policy():
+            raise UserError(
+                self.env._(
+                    "Shopify fulfillment export is disabled. "
+                    "Cannot retry an outgoing delivery."
+                )
+            )
         instance = self.instance_id
         if not instance.active:
             return False
