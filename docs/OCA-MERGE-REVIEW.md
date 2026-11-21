@@ -62,7 +62,7 @@ the **integration branch only**.
 - Use OCA's new fulfillment retry, tracking, and missed-push architecture, with
   `fulfillment_export_enabled` enforced at enqueue **and** execution.
 - Use OCA's relocated image models and `shopify_connector_website_sale`. Database
-  upgrade and image ownership migration remain untested.
+  upgrade and media ownership preservation passed on an isolated clone on 2026-11-21.
 - Preserve the existing fork `.github/workflows/` definitions because the GitHub Actions
   token lacked permission to modify workflow files. Review this infrastructure
   divergence separately.
@@ -137,9 +137,8 @@ The upstream test method inventory was rechecked against OCA `5454e91b`:
   this remains desired before closing SW-OCA-003. Do **not** restore old OCA cursor
   semantics merely to match method names.
 
-Remaining tests are not evidence of complete live write safety or successful upgrade on
-an existing database. Source and test integration are separate from the post-cleanup
-clone upgrade gate.
+The 2026-11-21 isolated upgrade and selected regressions do not prove complete live
+Shopify write safety, final-head CI, or release readiness.
 
 ## Required no-mutation guarantees
 
@@ -192,8 +191,8 @@ guard in code and test it **before creating a merge commit**.
 - The branch includes `test_cutover_blocks_reimport_of_deleted_historical_binding` and
   restored OCA order regressions. Odoo/OCB fresh-install CI passed at `52808357` (run
   `44824685850`). This is not the clone-upgrade test.
-- OCA source merge commit `a6293a19` is confirmed. A live or isolated Odoo module
-  upgrade **has not** been performed; no production change is authorized.
+- OCA source merge commit `a6293a19` is confirmed. An isolated Odoo module
+  upgrade passed on 2026-11-21; no production change is authorized.
 
 ## Follow-up validation — 2026-11-21
 
