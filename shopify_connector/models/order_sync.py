@@ -543,9 +543,7 @@ class ShopifyOrderSync(models.Model):
         # A persisted Odoo order plus success digest permits recovery after
         # a temporary import error, without reviving deleted historical orders.
         # This shared job is invoked by webhook, bulk and drift imports.
-        previously_synced = bool(
-            binding and binding.odoo_id and binding.payload_digest
-        )
+        previously_synced = bool(binding and binding.odoo_id and binding.payload_digest)
         cutoff = instance.order_import_date_from
         created_at = _utc_datetime(order_data.get("created_at"))
         if not (binding and (binding.state == "synced" or previously_synced)) and (
