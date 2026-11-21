@@ -1,6 +1,8 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from odoo.tests.common import TransactionCase
+
+from odoo.addons.queue_job.exception import RetryableJobError
 
 from ..models.customer_sync import PHONE_MATCH_CANDIDATE_LIMIT
 
@@ -122,6 +124,59 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertEqual(binding.odoo_id.company_id, self.instance.company_id)
         self.assertFalse(binding.odoo_id.is_company)
 
+    def test_failed_first_import_still_seeds_the_new_partner_on_retry(self):
+        mapping = self.instance.field_mapping_ids.filtered(
+            lambda item: item.field == "customer_addresses"
+        )
+        if mapping:
+            mapping.owner = "odoo"
+        else:
+            self.env["shopify.field.mapping"].create(
+                {
+                    "instance_id": self.instance.id,
+                    "field": "customer_addresses",
+                    "owner": "odoo",
+                }
+            )
+        payload = self._payload(
+            5,
+            addressesV2={
+                "nodes": [
+                    {
+                        "id": "gid://shopify/MailingAddress/50",
+                        "firstName": "Seed",
+                        "lastName": "Address",
+                        "address1": "Seed Street",
+                        "city": "Jakarta",
+                        "countryCodeV2": "ID",
+                    }
+                ]
+            },
+        )
+        customer_class = type(self.customer_model)
+        sync_tags = customer_class._sync_tags
+
+        # The first import creates the partner, then fails before seeding.
+        with patch.object(
+            customer_class, "_sync_tags", side_effect=ValueError("Tag failure")
+        ):
+            self.assertFalse(
+                self.customer_model._job_import_customer(self.instance.id, payload)
+            )
+        binding = self.customer_model.search(
+            [("shopify_id", "=", "gid://shopify/Customer/5")]
+        )
+        self.assertEqual(binding.state, "error")
+        self.assertTrue(binding.initial_seed_pending)
+
+        with patch.object(customer_class, "_sync_tags", sync_tags):
+            self.customer_model._job_import_customer(self.instance.id, payload)
+
+        # Odoo owns addresses, yet the new partner gets them once from Shopify.
+        self.assertEqual(binding.state, "synced")
+        self.assertFalse(binding.initial_seed_pending)
+        self.assertEqual(binding.address_binding_ids.odoo_id.street, "Seed Street")
+
     def test_address_import_is_idempotent_by_shopify_address_id(self):
         payload = self._payload(
             4,
@@ -148,6 +203,116 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertEqual(binding.address_binding_ids.odoo_id.street, "First Street")
         self.assertEqual(binding.address_binding_ids.odoo_id.type, "invoice")
 
+    def test_removed_address_used_by_an_order_is_archived(self):
+        def address(address_id, street):
+            return {
+                "id": f"gid://shopify/MailingAddress/{address_id}",
+                "firstName": "Alice",
+                "lastName": "Address",
+                "address1": street,
+                "city": "Jakarta",
+                "countryCodeV2": "ID",
+            }
+
+        payload = self._payload(
+            5,
+            defaultAddress={"id": "gid://shopify/MailingAddress/50"},
+            addressesV2={
+                "nodes": [address(50, "First Street"), address(51, "Old Street")]
+            },
+        )
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        binding = self.customer_model.browse(binding_id)
+        old_address = binding.address_binding_ids.filtered(
+            lambda item: item.shopify_id.endswith("/51")
+        ).odoo_id
+        self.env["sale.order"].create(
+            {
+                "partner_id": binding.odoo_id.id,
+                "partner_shipping_id": old_address.id,
+            }
+        )
+
+        payload["addressesV2"] = {"nodes": [address(50, "First Street")]}
+        payload["lastName"] = "Renamed"
+        self.customer_model._job_import_customer(self.instance.id, payload)
+
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(binding.odoo_id.name, "Shopify Renamed")
+        self.assertEqual(len(binding.address_binding_ids), 1)
+        self.assertFalse(old_address.active)
+
+    def test_odoo_owned_customer_address_preserves_confirmed_order_address(self):
+        # Explicit Odoo ownership protects historical order addresses from later
+        # Shopify customer MailingAddress changes, without a fork patch.
+        mapping = self.instance.field_mapping_ids.filtered(
+            lambda item: item.field == "customer_addresses"
+        )
+        if mapping:
+            mapping.owner = "odoo"
+        else:
+            self.env["shopify.field.mapping"].create(
+                {
+                    "instance_id": self.instance.id,
+                    "field": "customer_addresses",
+                    "owner": "odoo",
+                }
+            )
+
+        def address(street):
+            return {
+                "id": "gid://shopify/MailingAddress/890",
+                "firstName": "Alice",
+                "lastName": "Customer",
+                "address1": street,
+                "city": "Vienna",
+                "zip": "1010",
+                "countryCodeV2": "AT",
+            }
+
+        payload = self._payload(
+            890,
+            addressesV2={"nodes": [address("Old Street 1")]},
+        )
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        binding = self.customer_model.browse(binding_id)
+        old_address = binding.address_binding_ids.odoo_id
+        self.assertEqual(old_address.street, "Old Street 1")
+
+        product = self.env["product.product"].create(
+            {"name": "Order Test Service", "type": "service"}
+        )
+        order = self.env["sale.order"].create(
+            {
+                "partner_id": binding.odoo_id.id,
+                "partner_shipping_id": old_address.id,
+                "partner_invoice_id": old_address.id,
+                "order_line": [
+                    (
+                        0,
+                        0,
+                        {
+                            "product_id": product.id,
+                            "product_uom_qty": 1,
+                            "price_unit": 10,
+                        },
+                    )
+                ],
+            }
+        )
+        order.action_confirm()
+        self.assertEqual(order.partner_shipping_id, old_address)
+
+        payload["addressesV2"] = {"nodes": [address("New Street 2")]}
+        self.customer_model._job_import_customer(self.instance.id, payload)
+
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(order.partner_shipping_id, old_address)
+        self.assertEqual(old_address.street, "Old Street 1")
+        self.assertEqual(order.partner_invoice_id.street, "Old Street 1")
+        self.assertEqual(binding.address_binding_ids.odoo_id.street, "Old Street 1")
+        self.assertEqual(binding.address_binding_ids.odoo_id, old_address)
+
     def test_tags_create_company_scoped_categories_without_duplicates(self):
         payload = self._payload(5, tags=["VIP", "Wholesale"])
 
@@ -172,3 +337,127 @@ class TestShopifyCustomerSync(TransactionCase):
             ),
             2,
         )
+
+    def test_company_contact_roles_come_from_location_role_assignments(self):
+        contact_id = "gid://shopify/CompanyContact/1"
+        assignment_id = "gid://shopify/CompanyContactRoleAssignment/1"
+        binding = self.env["shopify.company"]._import_company(
+            self.instance,
+            {
+                "id": "gid://shopify/Company/1",
+                "name": "Acme Wholesale",
+                "locations": {
+                    "nodes": [
+                        {
+                            "id": "gid://shopify/CompanyLocation/1",
+                            "name": "Acme HQ",
+                            "roleAssignments": {
+                                "nodes": [
+                                    {
+                                        "id": assignment_id,
+                                        "role": {
+                                            "id": "gid://shopify/CompanyContactRole/1",
+                                            "name": "Ordering only",
+                                        },
+                                        "companyContact": {"id": contact_id},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+                "contacts": {
+                    "nodes": [
+                        {
+                            "id": contact_id,
+                            "title": "Buyer",
+                            "customer": {
+                                "id": "gid://shopify/Customer/900",
+                                "displayName": "Jane Buyer",
+                                "email": "jane.buyer@example.com",
+                                "phone": "",
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+
+        self.assertEqual(binding.contact_binding_ids.roles, "Ordering only")
+
+    def test_export_sends_no_phone_when_the_partner_has_none(self):
+        # Odoo owns the phone and the partner has no phone: the export sends
+        # an empty phone instead of failing.
+        binding = self.customer_model.browse(
+            self.customer_model._job_import_customer(self.instance.id, self._payload(7))
+        )
+        self.instance.customer_export_enabled = True
+        mapping = self.instance.field_mapping_ids.filtered(
+            lambda item: item.field == "customer_phone"
+        )
+        if mapping:
+            mapping.owner = "odoo"
+        else:
+            self.env["shopify.field.mapping"].create(
+                {
+                    "instance_id": self.instance.id,
+                    "field": "customer_phone",
+                    "owner": "odoo",
+                }
+            )
+        binding.odoo_id.phone = False
+        client = Mock()
+        with patch.object(type(self.instance), "_shopify_client", return_value=client):
+            binding._job_export_customer()
+
+        sent = client.execute.call_args.args[1]["input"]
+        self.assertEqual(sent, {"id": binding.shopify_id, "phone": None})
+
+    def _hold_match_lock(self, customer):
+        """Take the partner match lock in a second cursor, like another job."""
+        lock_key = self.customer_model._partner_match_lock_key(self.instance, customer)
+        self.assertTrue(lock_key)
+        other_cr = self.env.registry.cursor()
+        other_cr.execute("SELECT pg_try_advisory_xact_lock(hashtext(%s))", (lock_key,))
+        self.assertTrue(other_cr.fetchone()[0])
+        return other_cr
+
+    def _release_match_lock(self, other_cr):
+        # The other cursor only held a lock; it never commits anything.
+        other_cr.rollback()
+        other_cr.close()
+
+    def test_busy_email_match_lock_retries_the_import(self):
+        payload = self._payload(60, email="Shared@Example.com")
+        # A job of another store imports the same e-mail at the same moment.
+        other_cr = self._hold_match_lock({"email": "shared@example.com", "phone": ""})
+        try:
+            with self.assertRaises(RetryableJobError):
+                self.customer_model._job_import_customer(self.instance.id, payload)
+        finally:
+            self._release_match_lock(other_cr)
+        # The other job is done, so the import goes on.
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        self.assertTrue(binding_id)
+
+    def test_busy_phone_match_lock_retries_the_import(self):
+        payload = self._payload(61, email="", phone="+6281234567001")
+        other_cr = self._hold_match_lock({"email": "", "phone": "+6281234567001"})
+        try:
+            with self.assertRaises(RetryableJobError):
+                self.customer_model._job_import_customer(self.instance.id, payload)
+        finally:
+            self._release_match_lock(other_cr)
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        self.assertTrue(binding_id)
+
+    def test_customer_without_email_and_phone_takes_no_match_lock(self):
+        payload = self._payload(62, email="", phone="")
+        self.assertFalse(
+            self.customer_model._partner_match_lock_key(
+                self.instance, {"email": "", "phone": ""}
+            )
+        )
+        # There is nothing to match on, so the import does not wait for a lock.
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        self.assertTrue(binding_id)

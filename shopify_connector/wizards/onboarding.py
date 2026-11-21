@@ -14,11 +14,13 @@ from ..lib.operability import missing_scopes, scope_handles
 REQUIRED_ADMIN_SCOPES = (
     "read_customers",
     "read_draft_orders",
+    "read_fulfillments",
     "read_inventory",
     "read_locations",
     "read_merchant_managed_fulfillment_orders",
     "read_orders",
     "read_products",
+    "read_returns",
     "write_customers",
     "write_inventory",
     "write_merchant_managed_fulfillment_orders",
@@ -302,6 +304,17 @@ class ShopifyInstanceWizard(models.TransientModel):
 
     def action_apply_policies(self):
         self.ensure_one()
+        # SW-OCA-011: the OCA 19 available-quantity import may double-count
+        # Shopify reservations and Odoo deliveries. Onboarding cannot approve
+        # this separate stock-ownership release gate.
+        if self.inventory_direction == "bidirectional":
+            raise UserError(
+                self.env._(
+                    "Shopify-to-Odoo inventory import is not approved. "
+                    "Select Odoo to Shopify; inbound inventory needs a "
+                    "separate safety review."
+                )
+            )
         self.instance_id.write(
             {
                 "order_confirmation_policy": (self.order_confirmation_policy),

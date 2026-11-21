@@ -1,5 +1,6 @@
 import logging
 from datetime import timedelta
+from functools import partial
 from urllib.parse import urlparse
 
 import psycopg2
@@ -406,6 +407,8 @@ class ShopifyInstance(models.Model):
             "shopify_plus_state": "unknown",
             "webhook_health_checked_at": False,
             "webhook_missing_topics": False,
+            # SW-OCA-011: duplicating a store is not inventory import approval.
+            "inventory_import_enabled": False,
         }
         if "shopify_payments_state" in self._fields:
             defaults["shopify_payments_state"] = "unknown"
@@ -447,30 +450,88 @@ class ShopifyInstance(models.Model):
             values.update({"res_model": record._name, "res_id": record.id})
         return self.env["shopify.log"].sudo().create(values)
 
+    def _record_failure(self, *, entity, direction, message):
+        self.ensure_one()
+        log_values = {
+            "entity": entity,
+            "direction": direction,
+            "level": "error",
+            "message": message,
+        }
+        self.state = "error"
+        self._write_log(record=self, **log_values)
+        self.env.cr.postrollback.add(
+            partial(self._record_failure_after_rollback, log_values)
+        )
+
+    def _record_failure_after_rollback(self, log_values):
+        try:
+            with self.env.registry.cursor() as cr:
+                instance = self.with_env(
+                    api.Environment(cr, self.env.uid, self.env.context, su=self.env.su)
+                )
+                if instance.exists():
+                    instance.state = "error"
+                    instance._write_log(record=instance, **log_values)
+        except Exception:
+            _logger.exception(
+                "Could not record the failure of Shopify instance %s.", self.id
+            )
+
+    def _fetch_shop_identity(self):
+        """Return the shop name and currency, or raise ShopifyError."""
+        self.ensure_one()
+        data = self._shopify_client().execute(SHOP_QUERY)
+        shop = data.get("shop", {})
+        shop_name = shop.get("name")
+        currency_code = shop.get("currencyCode")
+        currency = (
+            self.env["res.currency"]
+            .with_context(active_test=False)
+            .search([("name", "=", currency_code)], limit=1)
+        )
+        if not shop_name or not currency:
+            raise ShopifyError(
+                self.env._("Shopify did not return a supported shop identity.")
+            )
+        return shop_name, currency
+
+    @api.model
+    def _cron_retest_connections(self):
+        """Reconnect instances in error once Shopify answers again.
+
+        An instance in error is skipped by every synchronization cron, so
+        without this a transient failure of a connection test or webhook
+        repair stops the synchronization until someone tests it again.
+        """
+        for instance in self.search([("active", "=", True), ("state", "=", "error")]):
+            try:
+                shop_name, _currency = instance._fetch_shop_identity()
+            except (ShopifyError, UserError):
+                # Still failing: the instance stays in error, and each
+                # failure is not logged again.
+                continue
+            instance.state = "connected"
+            instance._write_log(
+                entity="instance",
+                direction="import",
+                level="info",
+                message=self.env._(
+                    "Connection to Shopify shop %s restored automatically.",
+                    shop_name,
+                ),
+                record=instance,
+            )
+
     def action_test_connection(self):
         self.ensure_one()
         try:
-            data = self._shopify_client().execute(SHOP_QUERY)
-            shop = data.get("shop", {})
-            shop_name = shop.get("name")
-            currency_code = shop.get("currencyCode")
-            currency = (
-                self.env["res.currency"]
-                .with_context(active_test=False)
-                .search([("name", "=", currency_code)], limit=1)
-            )
-            if not shop_name or not currency:
-                raise ShopifyError(
-                    self.env._("Shopify did not return a supported shop identity.")
-                )
+            shop_name, currency = self._fetch_shop_identity()
         except ShopifyError as exc:
-            self.state = "error"
-            self._write_log(
+            self._record_failure(
                 entity="instance",
                 direction="import",
-                level="error",
                 message=self.env._("Connection test failed: %s", exc),
-                record=self,
             )
             raise UserError(
                 self.env._("Shopify connection test failed: %s", exc)
@@ -504,6 +565,20 @@ class ShopifyInstance(models.Model):
             raise UserError(self.env._("Configure the Odoo web base URL first."))
         return f"{base_url.rstrip('/')}/shopify/webhook/{self.id}"
 
+    def _required_webhook_topics(self):
+        return REQUIRED_WEBHOOK_TOPICS
+
+    def _webhook_repair_error(self, reason):
+        self.ensure_one()
+        self._record_failure(
+            entity="webhook_subscription",
+            direction="export",
+            message=self.env._("Webhook subscription repair failed: %s", reason),
+        )
+        return UserError(
+            self.env._("Could not repair Shopify webhook subscriptions: %s", reason)
+        )
+
     def action_repair_webhook_subscriptions(self):
         self.ensure_one()
         client = self._shopify_client()
@@ -511,21 +586,23 @@ class ShopifyInstance(models.Model):
         subscription_input = {"callbackUrl": callback_url, "format": "JSON"}
         created = 0
         repaired = 0
+        failures = []
         try:
             data = client.execute(WEBHOOK_SUBSCRIPTIONS_QUERY)
-            nodes = data.get("webhookSubscriptions", {}).get("nodes", [])
-            subscriptions = {
-                node.get("topic"): node
-                for node in nodes
-                if isinstance(node, dict) and node.get("topic")
-            }
-            for topic in REQUIRED_WEBHOOK_TOPICS:
-                existing = subscriptions.get(topic)
-                current_url = (
-                    existing.get("endpoint", {}).get("callbackUrl")
-                    if existing
-                    else None
-                )
+        except ShopifyError as exc:
+            raise self._webhook_repair_error(exc) from exc
+        nodes = data.get("webhookSubscriptions", {}).get("nodes", [])
+        subscriptions = {
+            node.get("topic"): node
+            for node in nodes
+            if isinstance(node, dict) and node.get("topic")
+        }
+        for topic in self._required_webhook_topics():
+            existing = subscriptions.get(topic)
+            current_url = (
+                existing.get("endpoint", {}).get("callbackUrl") if existing else None
+            )
+            try:
                 if not existing:
                     client.execute(
                         WEBHOOK_SUBSCRIPTION_CREATE,
@@ -544,18 +621,20 @@ class ShopifyInstance(models.Model):
                         },
                     )
                     repaired += 1
-        except ShopifyError as exc:
-            self.state = "error"
-            self._write_log(
-                entity="webhook_subscription",
-                direction="export",
-                level="error",
-                message=self.env._("Webhook subscription repair failed: %s", exc),
-                record=self,
+            except ShopifyError as exc:
+                failures.append(f"{topic}: {exc}")
+        if failures:
+            raise self._webhook_repair_error(
+                self.env._(
+                    "%(created)s created and %(repaired)s repaired, but Shopify "
+                    "refused these topics, usually because the app lacks the "
+                    "access scope or the protected customer data they need:\n"
+                    "%(failures)s",
+                    created=created,
+                    repaired=repaired,
+                    failures="\n".join(failures),
+                )
             )
-            raise UserError(
-                self.env._("Could not repair Shopify webhook subscriptions: %s", exc)
-            ) from exc
 
         self.state = "connected"
         if "webhook_health_checked_at" in self._fields:

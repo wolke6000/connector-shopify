@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.lib.client import ShopifyError
 
 
 class TestShopifyInboundFulfillment(TransactionCase):
@@ -651,6 +652,77 @@ class TestShopifyInboundFulfillment(TransactionCase):
             )
         trap.assert_jobs_count(0)
         self.assertEqual(self.sale.picking_ids.state, "done")
+
+    def test_fulfillment_rejects_partial_allocation_of_requested_quantity(self):
+        # F01: Shopify shipped two units, but the Odoo demand currently
+        # contains only one. Do not validate that one unit as a complete
+        # fulfillment; wait for the order/move quantities to be reconciled.
+        self.widget_line.odoo_id.product_uom_qty = 1
+        self._stock(self.widget, 1)
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        self.assertEqual(
+            picking.move_ids.filtered(
+                lambda move: move.product_id == self.widget
+            ).product_uom_qty,
+            1,
+        )
+
+        fulfillment = self._import(self._payload(964, [(self.widget_line, 2)]))
+
+        self.assertEqual(fulfillment.state, "error")
+        self.assertFalse(fulfillment.picking_id)
+        self.assertNotEqual(picking.state, "done")
+        self.assertEqual(self.widget_line.odoo_id.qty_delivered, 0)
+
+    def test_incomplete_fulfillment_retries_after_shopify_api_recovers(self):
+        # F02: a transient API error and line-less webhook must not be
+        # acknowledged as a fully processed Shopify fulfillment.
+        self._stock(self.widget, 2)
+        self._stock(self.gadget, 2)
+        self.sale.action_confirm()
+        picking = self.sale.picking_ids
+        fulfillment_id = "gid://shopify/Fulfillment/965"
+        webhook = {
+            "order_id": 810,
+            "status": "success",
+        }
+        client = MagicMock()
+        client.execute.side_effect = ShopifyError("Temporary Shopify API failure")
+        with patch.object(type(self.instance), "_shopify_client", return_value=client):
+            binding_id = self.env["shopify.fulfillment"]._job_import_from_shopify(
+                self.instance.id, fulfillment_id, webhook
+            )
+        fulfillment = self.env["shopify.fulfillment"].browse(binding_id)
+        self.assertEqual(fulfillment.state, "error")
+        self.assertFalse(fulfillment.picking_id)
+        self.assertNotEqual(picking.state, "done")
+
+        complete_payload = self._payload(
+            965, [(self.widget_line, 2), (self.gadget_line, 2)]
+        )
+        client.execute.side_effect = [
+            {
+                "order": {
+                    "id": self.order_binding.shopify_id,
+                    "fulfillmentOrders": {"nodes": []},
+                    "fulfillments": [{"id": fulfillment_id}],
+                }
+            },
+            {"fulfillment": complete_payload},
+        ]
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            trap_jobs() as trap,
+        ):
+            self.order_binding._job_refresh_fulfillment_orders()
+            trap.assert_jobs_count(
+                1, only=self.env["shopify.fulfillment"]._job_import_from_shopify
+            )
+            trap.perform_enqueued_jobs()
+        self.assertEqual(fulfillment.state, "synced")
+        self.assertEqual(fulfillment.picking_id, picking)
+        self.assertEqual(picking.state, "done")
 
     def test_unmapped_fulfillment_line_does_not_ship_matched_lines(self):
         self._stock(self.widget, 2)

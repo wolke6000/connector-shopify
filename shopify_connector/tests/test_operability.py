@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from ..models.instance import REQUIRED_WEBHOOK_TOPICS
@@ -43,6 +44,31 @@ class TestShopifyOnboarding(TransactionCase):
             set(wizard.missing_scopes.splitlines()),
             set(REQUIRED_ADMIN_SCOPES) - {"read_orders"},
         )
+
+    def test_bidirectional_inventory_onboarding_is_blocked(self):
+        # SW-OCA-011: onboarding cannot authorize an unsafe inventory import.
+        instance = self.env["shopify.instance"].create(
+            {
+                "name": "Inbound Inventory Blocked",
+                "shop_url": "inbound-blocked.myshopify.com",
+                "access_token": "token",
+                "webhook_secret": "secret",
+            }
+        )
+        wizard = self.env["shopify.instance.wizard"].create(
+            {
+                "name": "Inbound Inventory Blocked",
+                "shop_url": instance.shop_url,
+                "webhook_secret": "secret",
+                "company_id": instance.company_id.id,
+                "instance_id": instance.id,
+                "inventory_direction": "bidirectional",
+            }
+        )
+        with self.assertRaisesRegex(UserError, "not approved"):
+            wizard.action_apply_policies()
+        self.assertFalse(instance.inventory_import_enabled)
+        self.assertNotEqual(wizard.step, "webhooks")
 
     def test_complete_wizard_queues_chained_initial_imports(self):
         callback_url = "https://odoo.example/shopify/webhook/wizard"

@@ -1,7 +1,10 @@
 from unittest.mock import Mock, patch
+from uuid import UUID
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
+
+from odoo.addons.shopify_connector.lib.client import ShopifyUserError
 
 
 class TestShopifyInventory(TransactionCase):
@@ -67,6 +70,45 @@ class TestShopifyInventory(TransactionCase):
             )
         return self.env["shopify.location"].create(values)
 
+    def test_inventory_import_remains_disabled_by_default(self):
+        # SW-OCA-011: inventory imports require their own approval. The
+        # Shopify available-quantity webhook can double-count order demand.
+        instance = self.env["shopify.instance"].create(
+            {
+                "name": "Inventory Import Off",
+                "shop_url": "inventory-off.myshopify.com",
+                "access_token": "test-token",
+                "webhook_secret": "test-secret",
+            }
+        )
+        self.assertFalse(instance.inventory_import_enabled)
+
+    def test_inventory_webhook_does_not_change_stock_when_import_disabled(self):
+        # SW-OCA-011: a received inventory webhook is not authorization to
+        # adjust Odoo stock, even when the product/location is mapped.
+        self._location_binding()
+        self.instance.inventory_import_enabled = False
+        event = self.env["shopify.webhook.event"].create(
+            {
+                "instance_id": self.instance.id,
+                "webhook_id": "inventory-import-off-1",
+                "topic": "inventory_levels/update",
+                "payload": {
+                    "inventory_item_id": 201,
+                    "location_id": 301,
+                    "available": 7,
+                },
+            }
+        )
+        quant = self.env["stock.quant"]
+        with (
+            patch.object(type(quant), "_update_available_quantity") as adjust,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            event._handle_inventory_level_update()
+        adjust.assert_not_called()
+        client.assert_not_called()
+
     def test_unmapped_location_refuses_inventory_write_and_logs(self):
         location = self._location_binding(mapped=False)
 
@@ -83,6 +125,42 @@ class TestShopifyInventory(TransactionCase):
                 limit=1,
             )
         )
+
+    def _inventory_item_response(self, level):
+        return {
+            "inventoryItem": {
+                "id": "gid://shopify/InventoryItem/201",
+                "tracked": True,
+                "inventoryLevel": level,
+            }
+        }
+
+    def test_read_shopify_quantity_returns_available_from_stocked_level(self):
+        location = self._location_binding()
+        client = Mock()
+        client.execute.return_value = self._inventory_item_response(
+            {
+                "id": "gid://shopify/InventoryLevel/1",
+                "quantities": [{"name": "available", "quantity": 7}],
+            }
+        )
+
+        quantity = self.variant_binding._read_shopify_inventory_quantity(
+            client, location
+        )
+
+        self.assertEqual(quantity, 7)
+
+    def test_read_shopify_quantity_is_none_when_item_not_stocked_at_location(self):
+        location = self._location_binding()
+        client = Mock()
+        client.execute.return_value = self._inventory_item_response(None)
+
+        quantity = self.variant_binding._read_shopify_inventory_quantity(
+            client, location
+        )
+
+        self.assertIsNone(quantity)
 
     def test_quant_change_enqueues_location_scoped_delta_job(self):
         location = self._location_binding()
@@ -144,3 +222,44 @@ class TestShopifyInventory(TransactionCase):
             limit=1,
         )
         self.assertIn("echo", log.message.lower())
+
+    def test_push_uses_change_from_quantity_and_a_key_per_attempt(self):
+        location = self._location_binding()
+        client = Mock()
+        client.execute.side_effect = [
+            ShopifyUserError(
+                "The changeFromQuantity argument no longer matches the persisted "
+                "quantity."
+            ),
+            {"inventorySetQuantities": {"userErrors": []}},
+        ]
+        with (
+            patch.object(type(self.instance), "_shopify_client", return_value=client),
+            patch.object(
+                type(self.variant_binding),
+                "_odoo_inventory_quantity",
+                return_value=9,
+            ),
+            patch.object(
+                type(self.variant_binding),
+                "_read_shopify_inventory_quantity",
+                side_effect=[5, 6],
+            ),
+        ):
+            self.assertTrue(self.variant_binding._push_inventory_level(location))
+
+        # The stale first attempt is retried with the quantity Shopify has now.
+        self.assertEqual(client.execute.call_count, 2)
+        keys = []
+        for call, expected_from in zip(
+            client.execute.call_args_list, (5, 6), strict=False
+        ):
+            variables = call.args[1]
+            quantity = variables["input"]["quantities"][0]
+            self.assertEqual(quantity["quantity"], 9)
+            self.assertEqual(quantity["changeFromQuantity"], expected_from)
+            self.assertNotIn("compareQuantity", quantity)
+            UUID(variables["idempotencyKey"])
+            keys.append(variables["idempotencyKey"])
+        self.assertNotEqual(keys[0], keys[1])
+        self.assertIn("@idempotent(key: $idempotencyKey)", call.args[0])

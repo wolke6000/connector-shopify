@@ -8,7 +8,6 @@ from odoo.exceptions import UserError, ValidationError
 
 from ..graphql import WEBHOOK_SUBSCRIPTIONS_QUERY
 from ..lib.operability import state_count_label
-from .instance import REQUIRED_WEBHOOK_TOPICS
 
 BINDING_DASHBOARD_MODELS = (
     ("Products", "shopify.product.template"),
@@ -52,8 +51,28 @@ class ShopifyBindingOperations(models.AbstractModel):
         self.write({"state": "pending", "error_message": False})
         return True
 
+    def _shopify_retry_blocked_by_export_policy(self):
+        # SW-OCA-005: an Odoo-origin fulfillment without a Shopify ID
+        # retries a Shopify write, not a read-only fulfillment refresh.
+        self.ensure_one()
+        return (
+            self._name == "shopify.fulfillment"
+            and self.origin == "odoo"
+            and not self.shopify_id
+            and self.picking_id
+            and not self.instance_id.fulfillment_export_enabled
+        )
+
     def action_retry_sync(self):
         failed = self.filtered(lambda binding: binding.state == "error")
+        # SW-OCA-005: reject before resetting any binding's error state.
+        if any(binding._shopify_retry_blocked_by_export_policy() for binding in failed):
+            raise UserError(
+                self.env._(
+                    "Shopify fulfillment export is disabled. "
+                    "Cannot retry an outgoing delivery."
+                )
+            )
         failed.write({"state": "pending", "error_message": False})
         for binding in failed:
             binding._shopify_enqueue_fresh_retry()
@@ -84,6 +103,13 @@ class ShopifyBindingOperations(models.AbstractModel):
 
     def _shopify_enqueue_fresh_retry(self):  # noqa: C901
         self.ensure_one()
+        if self._shopify_retry_blocked_by_export_policy():
+            raise UserError(
+                self.env._(
+                    "Shopify fulfillment export is disabled. "
+                    "Cannot retry an outgoing delivery."
+                )
+            )
         instance = self.instance_id
         if not instance.active:
             return False
@@ -149,6 +175,12 @@ class ShopifyBindingOperations(models.AbstractModel):
                 self.env["shopify.fulfillment"].with_delay(
                     **self._shopify_retry_options()
                 )._job_import_from_shopify(instance.id, self.shopify_id)
+            elif self.origin == "odoo" and self.picking_id:
+                # An unconfirmed push: the job binds what Shopify created, or
+                # sends the delivery again when Shopify holds nothing.
+                self.order_binding_id.with_delay(
+                    **self._shopify_retry_options()
+                )._job_push_picking_fulfillment(self.picking_id.id)
             else:
                 self.order_binding_id.with_delay(
                     **self._shopify_retry_options()
@@ -345,7 +377,7 @@ class ShopifyInstanceOperability(models.Model):
         else:
             remote = self.env._("Remote subscriptions: healthy")
         lines = [remote]
-        for topic in REQUIRED_WEBHOOK_TOPICS:
+        for topic in self._required_webhook_topics():
             event = event_model.search(
                 [
                     ("instance_id", "=", self.id),
@@ -373,7 +405,7 @@ class ShopifyInstanceOperability(models.Model):
         }
         missing = [
             topic
-            for topic in REQUIRED_WEBHOOK_TOPICS
+            for topic in self._required_webhook_topics()
             if subscriptions.get(topic) != callback_url
         ]
         self.write(

@@ -119,6 +119,17 @@ class ShopifyOrder(models.Model):
     return_binding_ids = fields.One2many(
         "shopify.return", "order_binding_id", string="Shopify Returns"
     )
+    handled_state = fields.Json(
+        string="Handled Shopify State",
+        readonly=True,
+        copy=False,
+        help="The Shopify line quantities and cancellation that a person "
+        "handled by hand after delivery. Later imports only apply new changes.",
+    )
+    handled_date = fields.Datetime(string="Handled On", readonly=True, copy=False)
+    handled_uid = fields.Many2one(
+        "res.users", string="Handled By", readonly=True, copy=False
+    )
 
     @api.constrains("instance_id", "odoo_id")
     def _check_order_company(self):
@@ -484,6 +495,8 @@ class ShopifyInstanceOrderConfig(models.Model):
     )
     auto_confirm_paid = fields.Boolean(default=True)
     auto_confirm_partially_paid = fields.Boolean(default=True)
+    # SW-OCA-002: policy cutoff distinct from payment-driven confirmation.
+    # See docs/OCA-DEVIATIONS.md.
     auto_confirm_order_date_from = fields.Datetime(
         string="Auto-confirm Orders From",
         help=(
@@ -506,6 +519,19 @@ class ShopifyInstanceOrderConfig(models.Model):
         default="manual",
     )
     high_risk_hold_enabled = fields.Boolean(default=True)
+    draft_order_import_enabled = fields.Boolean(
+        string="Import Draft Orders",
+        default=True,
+        help="Import Shopify draft orders as quotations. An order created from a "
+        "draft order then continues on the quotation of its draft order.",
+    )
+    order_use_shopify_name = fields.Boolean(
+        string="Use Shopify Order Name",
+        help="Name the sale orders created from Shopify after their Shopify order, "
+        "such as #1001, instead of the Odoo sequence. Sale orders already in Odoo "
+        "keep their name. Two stores of the same company can both send an order "
+        "#1001, so their sale orders get the same name.",
+    )
     placeholder_product_id = fields.Many2one(
         "product.product", check_company=True, ondelete="restrict"
     )
@@ -535,6 +561,8 @@ class ShopifyInstanceOrderConfig(models.Model):
         help="Orders updated in Shopify since this timestamp are reconciled. "
         "Move it back to recheck older order updates.",
     )
+    # SW-OCA-003: persisted pending updates until successful acknowledgment.
+    # See docs/OCA-DEVIATIONS.md; reassess upstream reconciliation.
     order_drift_pending = fields.Json(
         string="Unacknowledged Shopify Order Updates",
         default=dict,

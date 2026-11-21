@@ -280,8 +280,10 @@
                                 invisible="not fulfillment_auto_validate_webhook"
                             />
                             <p class="text-muted">
-                                Disabled is log-only. Enable only when external
-                                fulfillment apps are authoritative for shipping.
+                                Enable when orders are shipped from Shopify or a
+                                fulfillment app instead of Odoo. When disabled,
+                                these fulfillments are only imported, and their
+                                deliveries are validated by hand.
                             </p>
                         </group>
                     </group>
@@ -295,6 +297,10 @@
                                             ('company_id', '=', parent.company_id)]"
                             />
                             <field name="tracking_company" />
+                            <field
+                                name="shipping_method_names"
+                                placeholder="e.g. Standard, Express"
+                            />
                         </list>
                     </field>
                 </page>

@@ -6,6 +6,8 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 from odoo.fields import Command
 
+from odoo.addons.queue_job.exception import RetryableJobError
+
 from ..graphql.customer import (
     CATALOGS_QUERY,
     COMPANIES_QUERY,
@@ -261,7 +263,6 @@ class ShopifyCustomerSync(models.Model):
             ],
             limit=1,
         )
-        is_new_partner = False
         if binding:
             partner = binding.odoo_id
         else:
@@ -272,19 +273,25 @@ class ShopifyCustomerSync(models.Model):
                 ],
                 limit=1,
             )
-            partner = company_contact.odoo_id or self._match_partner(instance, customer)
+            partner = company_contact.odoo_id
             if not partner:
+                self._lock_partner_match(instance, customer)
+                partner = self._match_partner(instance, customer)
+            is_new_partner = not partner
+            if is_new_partner:
                 partner = (
                     self.env["res.partner"]
                     .with_context(shopify_customer_import=True)
                     .create(self._new_partner_values(instance, customer))
                 )
-                is_new_partner = True
+            # The binding outlives a failed first import, so it remembers that
+            # the new partner still needs every field seeded from Shopify.
             binding = self.create(
                 {
                     "instance_id": instance.id,
                     "shopify_id": customer["id"],
                     "odoo_id": partner.id,
+                    "initial_seed_pending": is_new_partner,
                 }
             )
         try:
@@ -292,7 +299,7 @@ class ShopifyCustomerSync(models.Model):
                 self._apply_customer(
                     binding,
                     customer,
-                    seed_all=is_new_partner,
+                    seed_all=binding.initial_seed_pending,
                     complete_snapshot=complete_snapshot,
                 )
         except Exception as exc:
@@ -312,6 +319,7 @@ class ShopifyCustomerSync(models.Model):
                 "tax_exempt": customer["tax_exempt"],
                 "external_updated_at": _utc_datetime(customer["updated_at"]),
                 "last_sync_date": fields.Datetime.now(),
+                "initial_seed_pending": False,
                 "state": "synced",
                 "error_message": False,
             }
@@ -338,6 +346,41 @@ class ShopifyCustomerSync(models.Model):
         if not customer:
             return False
         return self._job_import_customer(instance.id, customer)
+
+    def _partner_match_lock_key(self, instance, customer):
+        """Return the advisory lock key for matching this customer to a partner.
+
+        The key is the company plus the e-mail, or the phone without an e-mail.
+        It is False when the customer has neither.
+        """
+        company = instance.company_id
+        email = normalize_email(customer["email"])
+        if email:
+            return f"shopify.customer.match.{company.id}.email.{email}"
+        phone = normalize_phone(customer["phone"], company.country_id.phone_code)
+        if phone:
+            return f"shopify.customer.match.{company.id}.phone.{phone}"
+        return False
+
+    def _lock_partner_match(self, instance, customer):
+        # Two stores can import the same person at the same moment. Their
+        # jobs do not see each other's new partner yet, so both would create
+        # one. Only one job may match a given e-mail or phone at a time.
+        lock_key = self._partner_match_lock_key(instance, customer)
+        if not lock_key:
+            return
+        # The single-key form does not overlap the per-store two-key locks.
+        self.env.cr.execute(
+            "SELECT pg_try_advisory_xact_lock(hashtext(%s))", (lock_key,)
+        )
+        if not self.env.cr.fetchone()[0]:
+            raise RetryableJobError(
+                self.env._(
+                    "Another job is matching a contact for Shopify customer %s.",
+                    customer["id"],
+                ),
+                seconds=5,
+            )
 
     def _match_partner(self, instance, customer):
         partner_model = self.env["res.partner"].with_context(active_test=False)
@@ -514,7 +557,10 @@ class ShopifyCustomerSync(models.Model):
             stale = binding.address_binding_ids.filtered(
                 lambda item: item.shopify_id not in imported_ids
             )
-            stale.mapped("odoo_id").with_context(shopify_customer_import=True).unlink()
+            partners = stale.mapped("odoo_id")
+            stale.unlink()
+            # Orders and invoices may still use the address, so keep it.
+            partners.with_context(shopify_customer_import=True).write({"active": False})
 
     def _match_unbound_address(self, binding, address):
         if not any(address[field] for field in ("address1", "city", "zip")):
@@ -599,7 +645,7 @@ class ShopifyCustomerSync(models.Model):
         if owners["customer_email"] == "odoo":
             values["email"] = partner.email or None
         if owners["customer_phone"] == "odoo":
-            values["phone"] = partner.phone or partner.mobile or None
+            values["phone"] = partner.phone or None
         if owners["customer_addresses"] == "odoo":
             values["addresses"] = [
                 self._export_address_values(child)
@@ -807,7 +853,7 @@ class ShopifyCompanySync(models.Model):
             for assignment in (location.get("roleAssignments") or {}).get(
                 "nodes"
             ) or []:
-                contact = assignment.get("contact") or {}
+                contact = assignment.get("companyContact") or {}
                 role = assignment.get("role") or {}
                 if contact.get("id") and role.get("name"):
                     roles_by_contact.setdefault(contact["id"], set()).add(role["name"])
