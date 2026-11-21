@@ -227,7 +227,7 @@ change to the OCA customer importer.
 - **Decision:** no fork change for HIGH-02; enabling inbound quantity writes requires a
   separate design review, tests and explicit authorization.
 
-### HIGH-04: automatic Odoo credit notes — conditional risk
+### HIGH-04: automatic Odoo credit notes — ACCEPTED (operational policy)
 
 - `order_invoicing_policy=manual` stops automatic invoice creation but does **not**
   prevent a posted Odoo credit note on Shopify refund import if a posted `out_invoice`
@@ -243,9 +243,7 @@ change to the OCA customer importer.
   and posted-invoice count on live production before deployment. If a posted invoice
   appears, stop and separately resolve the credit-note risk before processing further
   Shopify refunds.
-- **Decision:** accept a documented operational restriction for now; no fork change for
-  HIGH-04. Reassess if upstream adds an explicit accounting guard or if accounting
-  workflow requirements change.
+- **Decision (2026-11-21): ACCEPTED — operational policy; not a PR #17 code/merge blocker.** Shopify creates and manages customer invoices and credit notes. Switchology will not post Odoo customer invoices linked to Shopify orders. Keep `order_invoicing_policy=manual`; do not add a fork-specific refund patch. The exception remains: a manually posted linked Odoo invoice could still trigger an automatic Odoo credit note, so the live preflight and stop condition above remain mandatory for deployment. Reassess when upstream provides an equivalent accounting guard or business requirements change.
 
 These decisions do not approve production configuration changes, deployment or Shopify
 writes.
