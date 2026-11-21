@@ -168,33 +168,31 @@ Document and review any future source-level divergence from OCA before implement
 
 ## Temporary customer address ownership policy (2026-11-21)
 
-**Business decision:** Prefer upstream configuration over a fork-only change.
-For Switchology, use `customer_addresses=odoo` **together with**
-`customer_export_enabled=False`. This is a temporary operational policy,
-**not** a change to the OCA customer importer.
+**Business decision:** Prefer upstream configuration over a fork-only change. For
+Switchology, use `customer_addresses=odoo` **together with**
+`customer_export_enabled=False`. This is a temporary operational policy, **not** a
+change to the OCA customer importer.
 
-- **Current state not yet changed:** The isolated production-derived snapshot
-  showed `customer_addresses=shopify`; customer export was disabled.
-  Recheck actual live settings and separately authorize the ownership change
-  before deployment. Do not claim the snapshot or production was modified.
+- **Current state not yet changed:** The isolated production-derived snapshot showed
+  `customer_addresses=shopify`; customer export was disabled. Recheck actual live
+  settings and separately authorize the ownership change before deployment. Do not claim
+  the snapshot or production was modified.
 - **Why:** With Shopify-owned customer addresses, a subsequent Shopify customer
-  MailingAddress update was observed to modify the same Odoo `res.partner`
-  referenced by a confirmed historical order (red-before test on
-  `9000b65b`). This behavior is byte-identical to the integrated OCA
-  upstream, not a merge artifact.
-- **Verified mitigation:** With Odoo-owned customer addresses, a new customer
-  still receives an initial Shopify address seed but subsequent customer
-  MailingAddress updates do not alter the already referenced Odoo contact.
-  Test `test_odoo_owned_customer_address_preserves_confirmed_order_address`
-  passed under Odoo and OCB (359 tests each, zero failures) at `72fb89b0`;
-  pre-commit passed.
-- **Trade-off:** Odoo will no longer continuously mirror subsequent edits to
-  Shopify's customer address book. Order-specific shipping/billing addresses
-  continue to be imported from each Shopify order independently.
-  `customer_addresses=odoo` alone does **not** forbid exports; retain and
-  verify `customer_export_enabled=False`, including preexisting queue jobs.
-- **Revisit:** When OCA upstream supports preserving historical order-linked
-  address partners while refreshing Shopify-owned customer addresses, assess
-  its regression coverage and migration impact. If satisfactory, consider
-  switching ownership back to `shopify` to restore continuous inbound customer
-  address updates, without a Switchology-specific implementation.
+  MailingAddress update was observed to modify the same Odoo `res.partner` referenced by
+  a confirmed historical order (red-before test on `9000b65b`). This behavior is
+  byte-identical to the integrated OCA upstream, not a merge artifact.
+- **Verified mitigation:** With Odoo-owned customer addresses, a new customer still
+  receives an initial Shopify address seed but subsequent customer MailingAddress
+  updates do not alter the already referenced Odoo contact. Test
+  `test_odoo_owned_customer_address_preserves_confirmed_order_address` passed under Odoo
+  and OCB (359 tests each, zero failures) at `72fb89b0`; pre-commit passed.
+- **Trade-off:** Odoo will no longer continuously mirror subsequent edits to Shopify's
+  customer address book. Order-specific shipping/billing addresses continue to be
+  imported from each Shopify order independently. `customer_addresses=odoo` alone does
+  **not** forbid exports; retain and verify `customer_export_enabled=False`, including
+  preexisting queue jobs.
+- **Revisit:** When OCA upstream supports preserving historical order-linked address
+  partners while refreshing Shopify-owned customer addresses, assess its regression
+  coverage and migration impact. If satisfactory, consider switching ownership back to
+  `shopify` to restore continuous inbound customer address updates, without a
+  Switchology-specific implementation.
