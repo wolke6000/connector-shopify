@@ -173,7 +173,9 @@ class TestShopifyInstance(TransactionCase):
             duplicate.guest_partner_id,
             self.instance.guest_partner_id,
         )
-        self.assertTrue(duplicate.inventory_import_enabled)
+        # SW-OCA-011: importing stock requires a separate approval per store.
+        self.assertFalse(duplicate.inventory_import_enabled)
+        self.assertTrue(self.instance.inventory_import_enabled)
         self.assertTrue(duplicate.customer_export_enabled)
         self.assertEqual(
             duplicate._product_field_owners(),
