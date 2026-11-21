@@ -196,3 +196,57 @@ change to the OCA customer importer.
   coverage and migration impact. If satisfactory, consider switching ownership back to
   `shopify` to restore continuous inbound customer address updates, without a
   Switchology-specific implementation.
+
+## Review decisions: inventory direction and Shopify accounting (2026-11-21)
+
+### HIGH-01: default inventory export eligibility — accepted
+
+- Keep OCA defaults `inventory_sync_enabled=True` for new Shopify product
+  template and variant bindings. This is deliberate: a newly imported Shopify
+  product should create Odoo product/variant bindings with Shopify InventoryItem
+  links, then synchronize **Odoo stock to Shopify** where tracking, storable
+  status, mapping and other existing eligibility guards permit it.
+- Do not disable existing inventory synchronization or introduce an additional
+  per-product opt-in by default. Respect existing per-binding opt-outs.
+- The inventory export path uses Shopify `inventorySetQuantities`; it is
+  distinct from importing Shopify stock into Odoo. Deployment must verify
+  warehouse/location mappings and the intended source-of-truth quantities.
+- **Decision:** accept existing upstream behavior; no fork change for HIGH-01.
+
+### HIGH-02: inbound Shopify stock webhook — disabled
+
+- Keep `shopify_instance.inventory_import_enabled=False`. This flag is
+  independent of importing Shopify products and InventoryItem identifiers.
+- The OCA `inventory_levels/update` handler returns immediately when this
+  flag is off. When enabled, it computes a delta against Odoo stock and calls
+  `stock.quant._update_available_quantity`, so bidirectional inventory
+  authority could introduce unintended stock adjustments.
+- The handler is identical to the inspected OCA upstream version. The isolated
+  production-derived snapshot has inventory import disabled, but the live
+  production configuration must be rechecked before deployment.
+- **Decision:** no fork change for HIGH-02; enabling inbound quantity writes
+  requires a separate design review, tests and explicit authorization.
+
+### HIGH-04: automatic Odoo credit notes — conditional risk
+
+- `order_invoicing_policy=manual` stops automatic invoice creation but does
+  **not** prevent a posted Odoo credit note on Shopify refund import if a posted
+  `out_invoice` is already linked to that Odoo sale order. This path also
+  exists in the inspected OCA upstream version.
+- Read-only SQL on the isolated production-derived snapshot reported
+  `order_invoicing_policy=manual`, `refund_uninvoiced_policy=adjust`,
+  **zero** Shopify orders linked to posted Odoo invoices and **zero** matching
+  posted Odoo invoices. Therefore the known credit-note path had no qualifying
+  invoices in that snapshot, but the risk is not eliminated for future manually
+  posted invoices.
+- Shopify is authoritative for invoicing, payments and credit notes. Do not
+  manually post Odoo customer invoices for Shopify-linked sale orders.
+  Recheck both the policy and posted-invoice count on live production before
+  deployment. If a posted invoice appears, stop and separately resolve the
+  credit-note risk before processing further Shopify refunds.
+- **Decision:** accept a documented operational restriction for now; no fork
+  change for HIGH-04. Reassess if upstream adds an explicit accounting guard or
+  if accounting workflow requirements change.
+
+These decisions do not approve production configuration changes, deployment or
+Shopify writes.
