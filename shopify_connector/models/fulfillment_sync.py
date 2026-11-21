@@ -205,12 +205,15 @@ class ShopifyOrderFulfillmentSync(models.Model):
             for item in _nodes(order.get("fulfillments"))
             if item.get("id")
         ]
+        # F02: an existing failed/pending binding is not an acknowledged
+        # fulfillment. Requeue it when the order is refreshed from Shopify.
         known = set(
             self.env["shopify.fulfillment"]
             .search(
                 [
                     ("instance_id", "=", self.instance_id.id),
                     ("shopify_id", "in", fulfillment_ids),
+                    ("state", "=", "synced"),
                 ]
             )
             .mapped("shopify_id")
@@ -1473,15 +1476,19 @@ class ShopifyExternalFulfillmentImport(models.Model):
                 line_id = shopify_gid("LineItem", order_line_id)
                 if line_id:
                     quantities[line_id] += int(line.get("quantity") or 0)
-        if not quantities:
+        if not any(quantity > 0 for quantity in quantities.values()):
+            # F02: never acknowledge incomplete Shopify fulfillment data.
+            # Keep a persistent error so the next order refresh retries it.
+            message = self.env._(
+                "External fulfillment has no usable line quantities; "
+                "retry the Shopify API import before validating the Odoo delivery."
+            )
+            self.write({"state": "error", "error_message": message})
             self.instance_id._write_log(
                 entity="fulfillment",
                 direction="import",
-                level="warning",
-                message=self.env._(
-                    "External fulfillment had no line quantities; Odoo "
-                    "delivery was not validated."
-                ),
+                level="error",
+                message=message,
                 record=self,
             )
             return False
@@ -1634,6 +1641,32 @@ class ShopifyExternalFulfillmentImport(models.Model):
                     "deliveries of the sale order, then retry."
                 )
             )
+        # F01: never validate a partial allocation as a complete Shopify
+        # fulfillment. The surrounding savepoint rolls back any earlier
+        # internal-step validation if the order's move quantities lag Shopify.
+        for (sale_line, product), quantity in needed.items():
+            covered = sum(
+                allocated
+                for move, allocated in allocation.items()
+                if move.sale_line_id == sale_line and move.product_id == product
+            )
+            if (
+                float_compare(
+                    covered, quantity, precision_rounding=product.uom_id.rounding
+                )
+                < 0
+            ):
+                raise ShopifyFulfillmentError(
+                    self.env._(
+                        "Shopify fulfilled %(expected)s of %(product)s on %(order)s, "
+                        "but only %(covered)s can be allocated to the Odoo delivery. "
+                        "Reimport the Shopify order and retry the fulfillment.",
+                        expected=quantity,
+                        product=product.display_name,
+                        order=self.order_binding_id.order_name,
+                        covered=covered,
+                    )
+                )
         pickings = self._external_moves(allocation).picking_id
         # Copy the tracking first, so the delivery keeps the tracking number
         # of the Shopify fulfillment.
