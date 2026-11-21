@@ -11,7 +11,6 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 from odoo.fields import Command
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
-from odoo.tools import escape_psql
 
 from odoo.addons.queue_job.exception import RetryableJobError
 
@@ -26,7 +25,6 @@ from ..graphql.order import (
     orders_updated_search,
 )
 from ..lib.bulk import ShopifyBulkRunner
-from ..lib.client import ShopifyError
 from ..lib.order import (
     apply_draft_order_discount,
     decimal_amount,
@@ -299,10 +297,6 @@ class ShopifyInstanceOrderSync(models.Model):
             # SW-OCA-003: queue drafts on bulk import, never from drift.
             count += self._queue_draft_orders(date_from, date_to)
         return count
-
-
-
-
 
     def _queue_draft_orders(self, date_from=False, date_to=False):
         query_terms = []
@@ -683,7 +677,9 @@ class ShopifyOrderSync(models.Model):
         )
         return binding.id
 
-    def _build_order(self, binding, instance, order_data):
+    # Historical cutoffs, address fallback and confirmed-line safety are coupled.
+    # Keep the exception local until these concerns are split with regression tests.
+    def _build_order(self, binding, instance, order_data):  # noqa: C901
         sale_order = binding.odoo_id
         takes_shopify_name = instance.order_use_shopify_name and not sale_order
         completed_binding = self.env["shopify.order"]
@@ -1220,7 +1216,6 @@ class ShopifyOrderSync(models.Model):
             {"product_uom_qty": 0}
         )
 
-
     def _line_binding_values(self, line_data):
         allocations = line_data["discount_allocations"]
         shop_discount = sum(
@@ -1613,6 +1608,7 @@ class ShopifyOrderSync(models.Model):
             )
 
         return product
+
     def _apply_shipping_carrier(self, instance, sale_order, order_data):
         """Set the carrier mapped to the order's Shopify shipping method.
 
