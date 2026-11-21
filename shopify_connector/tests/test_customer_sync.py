@@ -242,6 +242,64 @@ class TestShopifyCustomerSync(TransactionCase):
         self.assertEqual(len(binding.address_binding_ids), 1)
         self.assertFalse(old_address.active)
 
+    def test_customer_address_update_preserves_confirmed_order_address(self):
+        # A Shopify address may be edited after an order used its old values.
+        def address(street):
+            return {
+                "id": "gid://shopify/MailingAddress/890",
+                "firstName": "Alice",
+                "lastName": "Customer",
+                "address1": street,
+                "city": "Vienna",
+                "zip": "1010",
+                "countryCodeV2": "AT",
+            }
+
+        payload = self._payload(
+            890,
+            addressesV2={"nodes": [address("Old Street 1")]},
+        )
+        binding_id = self.customer_model._job_import_customer(self.instance.id, payload)
+        binding = self.customer_model.browse(binding_id)
+        old_address = binding.address_binding_ids.odoo_id
+        self.assertEqual(old_address.street, "Old Street 1")
+
+        product = self.env["product.product"].create(
+            {"name": "Order Test Service", "type": "service"}
+        )
+        order = self.env["sale.order"].create(
+            {
+                "partner_id": binding.odoo_id.id,
+                "partner_shipping_id": old_address.id,
+                "partner_invoice_id": old_address.id,
+                "order_line": [
+                    (
+                        0,
+                        0,
+                        {
+                            "product_id": product.id,
+                            "product_uom_qty": 1,
+                            "price_unit": 10,
+                        },
+                    )
+                ],
+            }
+        )
+        order.action_confirm()
+        self.assertEqual(order.partner_shipping_id, old_address)
+
+        payload["addressesV2"] = {"nodes": [address("New Street 2")]}
+        self.customer_model._job_import_customer(self.instance.id, payload)
+
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(order.partner_shipping_id, old_address)
+        self.assertEqual(old_address.street, "Old Street 1")
+        self.assertEqual(order.partner_invoice_id.street, "Old Street 1")
+        self.assertEqual(
+            binding.address_binding_ids.odoo_id.street, "New Street 2"
+        )
+        self.assertNotEqual(binding.address_binding_ids.odoo_id, old_address)
+
     def test_tags_create_company_scoped_categories_without_duplicates(self):
         payload = self._payload(5, tags=["VIP", "Wholesale"])
 
