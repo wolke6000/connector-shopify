@@ -486,7 +486,9 @@ class ShopifyOrderFulfillmentSync(models.Model):
 
     # SW-OCA-005: already-queued jobs must also respect export opt-in.
     def _job_push_picking_fulfillment(self, picking_id):
-        if not (self.instance_id.active and self.instance_id.fulfillment_export_enabled):
+        if not (
+            self.instance_id.active and self.instance_id.fulfillment_export_enabled
+        ):
             return False
         result = self._push_picking_fulfillment(picking_id)
         if result:
@@ -1206,8 +1208,7 @@ class StockPickingShopifyFulfillmentSync(models.Model):
         ):
             bindings = picking.sale_id.sudo().shopify_binding_ids.filtered(
                 lambda item: (
-                    not item.is_draft
-                    and item.instance_id.fulfillment_export_enabled
+                    not item.is_draft and item.instance_id.fulfillment_export_enabled
                 )
             )
             synced = bindings.filtered(lambda item: item.state == "synced")
