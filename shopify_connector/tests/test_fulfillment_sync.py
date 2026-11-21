@@ -165,6 +165,35 @@ class TestShopifyFulfillmentSync(TransactionCase):
         delayed.assert_not_called()
         client.assert_not_called()
 
+    def test_generic_retry_keeps_failed_outbound_fulfillment_when_disabled(self):
+        # SW-OCA-005: the common retry action must not reset the error or
+        # enqueue a Shopify write after outbound fulfillment is disabled.
+        self.sale.action_confirm()
+        fulfillment = self.env["shopify.fulfillment"].create(
+            {
+                "instance_id": self.instance.id,
+                "order_binding_id": self.order_binding.id,
+                "picking_id": self.sale.picking_ids.id,
+                "origin": "odoo",
+                "state": "error",
+                "error_message": "Old outbound push failed",
+            }
+        )
+        self.instance.fulfillment_export_enabled = False
+        with (
+            patch.object(type(self.order_binding), "with_delay") as delayed,
+            patch.object(type(self.instance), "_shopify_client") as client,
+        ):
+            with self.assertRaisesRegex(UserError, "export is disabled"):
+                fulfillment.action_retry_sync()
+            with self.assertRaisesRegex(UserError, "export is disabled"):
+                fulfillment._shopify_enqueue_fresh_retry()
+
+        self.assertEqual(fulfillment.state, "error")
+        self.assertEqual(fulfillment.error_message, "Old outbound push failed")
+        delayed.assert_not_called()
+        client.assert_not_called()
+
     def test_missed_fulfillment_is_not_requeued_after_export_disabled(self):
         # SW-OCA-005: newly added upstream recovery may not bypass the opt-out.
         self.env["stock.quant"]._update_available_quantity(
