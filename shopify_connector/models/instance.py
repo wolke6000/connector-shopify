@@ -407,6 +407,8 @@ class ShopifyInstance(models.Model):
             "shopify_plus_state": "unknown",
             "webhook_health_checked_at": False,
             "webhook_missing_topics": False,
+            # SW-OCA-011: duplicating a store is not inventory import approval.
+            "inventory_import_enabled": False,
         }
         if "shopify_payments_state" in self._fields:
             defaults["shopify_payments_state"] = "unknown"
