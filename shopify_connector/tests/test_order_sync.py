@@ -15,9 +15,9 @@ from odoo.addons.shopify_connector.graphql.order import (
     DRAFT_ORDER_BY_ID_QUERY,
     DRAFT_ORDERS_QUERY,
     ORDER_BY_ID_QUERY,
+    orders_updated_search,
 )
 from odoo.addons.shopify_connector.lib.client import ShopifyError
-from odoo.addons.shopify_connector.graphql.order import orders_updated_search
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -180,9 +180,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
     def test_cutover_blocks_reimport_of_deleted_historical_binding(self):
         # SW-OCA-001: simulate the verified one-off cleanup and a late webhook.
         old_payload = self._payload(order_id=907)
-        binding_id = self.order_model._job_import_order(
-            self.instance.id, old_payload
-        )
+        binding_id = self.order_model._job_import_order(self.instance.id, old_payload)
         binding = self.order_model.browse(binding_id)
         sale_order = binding.odoo_id
         self.assertTrue(sale_order)
@@ -195,14 +193,10 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertFalse(self.env["sale.order"].browse(sale_order_id).exists())
 
         self.instance.order_import_date_from = "2026-11-07"
-        updated_payload = self._payload(
-            order_id=907, updatedAt="2026-11-19T18:26:00Z"
-        )
+        updated_payload = self._payload(order_id=907, updatedAt="2026-11-19T18:26:00Z")
         client = Mock()
         client.execute.return_value = {"order": updated_payload}
-        with patch.object(
-            type(self.instance), "_shopify_client", return_value=client
-        ):
+        with patch.object(type(self.instance), "_shopify_client", return_value=client):
             self.assertFalse(
                 self.order_model._job_import_order_from_api(self.instance.id, 907)
             )
@@ -1142,11 +1136,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(sale_order.order_line), 1)
         self.assertEqual(len(binding.line_binding_ids), 1)
         self.assertEqual(sale_order.amount_total, 10)
-
-
-
-
-
 
     def test_unmapped_tax_records_actionable_error(self):
         payload = self._payload(order_id=5, total="11.00")
