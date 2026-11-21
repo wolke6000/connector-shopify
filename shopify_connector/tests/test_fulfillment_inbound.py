@@ -661,9 +661,12 @@ class TestShopifyInboundFulfillment(TransactionCase):
         self._stock(self.widget, 1)
         self.sale.action_confirm()
         picking = self.sale.picking_ids
-        self.assertEqual(picking.move_ids.filtered(
-            lambda move: move.product_id == self.widget
-        ).product_uom_qty, 1)
+        self.assertEqual(
+            picking.move_ids.filtered(
+                lambda move: move.product_id == self.widget
+            ).product_uom_qty,
+            1,
+        )
 
         fulfillment = self._import(self._payload(964, [(self.widget_line, 2)]))
 
@@ -686,9 +689,7 @@ class TestShopifyInboundFulfillment(TransactionCase):
         }
         client = MagicMock()
         client.execute.side_effect = ShopifyError("Temporary Shopify API failure")
-        with patch.object(
-            type(self.instance), "_shopify_client", return_value=client
-        ):
+        with patch.object(type(self.instance), "_shopify_client", return_value=client):
             binding_id = self.env["shopify.fulfillment"]._job_import_from_shopify(
                 self.instance.id, fulfillment_id, webhook
             )
