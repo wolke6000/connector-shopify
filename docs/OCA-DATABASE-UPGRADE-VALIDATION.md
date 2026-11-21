@@ -183,39 +183,38 @@ validation.**
 
 ## Failed first rehearsal and corrected source snapshot
 
-The first isolated migration rehearsal used the older CP2A clone, with 76
-`sale.order` records, 82 Shopify order bindings, 143 image bindings and 42
-image/variant relationships. Seven Shopify media IDs were each bound to more
-than one product (20 bindings, 13 additional occurrences). The old constraint
-allowed `UNIQUE(instance_id, template_binding_id, shopify_id)`. During the
-upgrade, the new OCA `UNIQUE(instance_id, shopify_id)` index **could not be
-created**. Odoo nevertheless exited with code 0 and reported installed module
-versions. **This rehearsal failed its schema gate** despite its successful
-process exit code; it is not evidence of a valid migration.
+The first isolated migration rehearsal used the older CP2A clone, with 76 `sale.order`
+records, 82 Shopify order bindings, 143 image bindings and 42 image/variant
+relationships. Seven Shopify media IDs were each bound to more than one product (20
+bindings, 13 additional occurrences). The old constraint allowed
+`UNIQUE(instance_id, template_binding_id, shopify_id)`. During the upgrade, the new OCA
+`UNIQUE(instance_id, shopify_id)` index **could not be created**. Odoo nevertheless
+exited with code 0 and reported installed module versions. **This rehearsal failed its
+schema gate** despite its successful process exit code; it is not evidence of a valid
+migration.
 
-A Shopify Admin API investigation in the earlier review established that the
-shared media IDs existed across five distinct Shopify products, including the
-3x5 bundle and its components/Beta products. They were not necessarily
-corrupt database rows. The merchant subsequently adjusted Shopify product
-media assignments (no connector source change). A newer production-derived
-snapshot, identified as `39689e91`, contained **79** sale orders, **85**
-Shopify order bindings, **127** image bindings, **38** image/variant relations,
-and **zero** repeated `(instance_id, shopify_id)` media keys before upgrade.
-This second snapshot was separately restored with its filestore and was the
-source of the successful isolated migration reported above.
+A Shopify Admin API investigation in the earlier review established that the shared
+media IDs existed across five distinct Shopify products, including the 3x5 bundle and
+its components/Beta products. They were not necessarily corrupt database rows. The
+merchant subsequently adjusted Shopify product media assignments (no connector source
+change). A newer production-derived snapshot, identified as `39689e91`, contained **79**
+sale orders, **85** Shopify order bindings, **127** image bindings, **38** image/variant
+relations, and **zero** repeated `(instance_id, shopify_id)` media keys before upgrade.
+This second snapshot was separately restored with its filestore and was the source of
+the successful isolated migration reported above.
 
-Post-upgrade evidence for `39689e91` included the expected unique constraint,
-zero invalid image relationships, preservation of all 127/38 records, correct
-`shopify_connector_website_sale` XML-ID ownership, preserved manual invoicing
-and order/confirmation cutoffs (`2026-11-07`), and zero pending/running queue
-jobs (16,504 done; 39 cancelled). Inbound webhook auto-validation was enabled,
-independently of disabled outbound fulfillment export. This is intentional,
-not a new outbound export authorization.
+Post-upgrade evidence for `39689e91` included the expected unique constraint, zero
+invalid image relationships, preservation of all 127/38 records, correct
+`shopify_connector_website_sale` XML-ID ownership, preserved manual invoicing and
+order/confirmation cutoffs (`2026-11-07`), and zero pending/running queue jobs (16,504
+done; 39 cancelled). Inbound webhook auto-validation was enabled, independently of
+disabled outbound fulfillment export. This is intentional, not a new outbound export
+authorization.
 
-**Release implication:** A zero-exit Odoo upgrade does not establish successful
-index creation. A fresh production preflight must check for repeated media
-keys, and post-upgrade checks must inspect PostgreSQL constraints/indexes and
-relevant Odoo logs. The clean Shopify state observed in November is not a
-permanent guarantee; future shared media IDs could recreate the condition.
-Do not delete valid cross-product media links or weaken upstream uniqueness
-without a separately reviewed decision. Recheck before deployment.
+**Release implication:** A zero-exit Odoo upgrade does not establish successful index
+creation. A fresh production preflight must check for repeated media keys, and
+post-upgrade checks must inspect PostgreSQL constraints/indexes and relevant Odoo logs.
+The clean Shopify state observed in November is not a permanent guarantee; future shared
+media IDs could recreate the condition. Do not delete valid cross-product media links or
+weaken upstream uniqueness without a separately reviewed decision. Recheck before
+deployment.
