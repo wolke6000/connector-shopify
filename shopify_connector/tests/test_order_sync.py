@@ -11,7 +11,6 @@ from odoo.sql_db import db_connect
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
 from odoo.addons.queue_job.exception import RetryableJobError
 from odoo.addons.queue_job.tests.common import trap_jobs
-from odoo.addons.shopify_connector.lib.order import normalize_order_payload
 from odoo.addons.shopify_connector.graphql.order import (
     ADDRESS_FIELDS,
     DRAFT_ORDER_BY_ID_QUERY,
@@ -20,6 +19,7 @@ from odoo.addons.shopify_connector.graphql.order import (
     orders_updated_search,
 )
 from odoo.addons.shopify_connector.lib.client import ShopifyError
+from odoo.addons.shopify_connector.lib.order import normalize_order_payload
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -2567,8 +2567,10 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         # Rounded discounted unit prices drift by EUR 0.02 for two 2-unit
         # lines; tax-included global rounding must still match the order.
         self.instance.company_id.tax_calculation_rounding_method = "round_globally"
-        eur = self.env["res.currency"].with_context(active_test=False).search(
-            [("name", "=", "EUR")], limit=1
+        eur = (
+            self.env["res.currency"]
+            .with_context(active_test=False)
+            .search([("name", "=", "EUR")], limit=1)
         )
         self.assertTrue(eur)
         self.currency = eur
