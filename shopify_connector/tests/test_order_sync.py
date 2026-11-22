@@ -1708,6 +1708,14 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             (1, "19.84", "1.38", "18.46", "2.95"),
             (1, "2.48", "0.17", "2.31", "0.37"),
         )
+        old_rounded_total = sum(
+            (
+                Decimal(rounded_unit) * quantity
+                for quantity, _, _, rounded_unit, _ in items
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(old_rounded_total, Decimal("239.91"))
         payload = self._payload(order_id=1351, total="250.64")
         payload.update(
             {
