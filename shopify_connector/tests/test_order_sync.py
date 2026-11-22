@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from freezegun import freeze_time
@@ -14,6 +15,7 @@ from odoo.addons.shopify_connector.graphql.order import (
     ORDER_BY_ID_QUERY,
 )
 from odoo.addons.shopify_connector.lib.client import ShopifyError
+from odoo.addons.shopify_connector.lib.order import normalize_order_payload
 
 
 class TestShopifyOrderSync(AccountTestInvoicingCommon):
@@ -1655,3 +1657,158 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertEqual(len(sale.partner_id.child_ids), child_count)
         self.assertEqual(sale.partner_shipping_id, replacement)
+
+    def test_bfcm_multi_line_tax_included_discount_rounding_1351(self):
+        # Anonymized monetary fixture from Shopify #1351 (2026-11-22).
+        # Rounded discounted unit prices drift by EUR 0.02 for two 2-unit
+        # lines; tax-included global rounding must still match the order.
+        self.instance.company_id.tax_calculation_rounding_method = "round_globally"
+        eur = (
+            self.env["res.currency"]
+            .with_context(active_test=False)
+            .search([("name", "=", "EUR")], limit=1)
+        )
+        self.assertTrue(eur)
+        self.currency = eur
+
+        tax = self.env["account.tax"].create(
+            {
+                "name": "BF-CM German VAT 19% included",
+                "amount": 19,
+                "amount_type": "percent",
+                "type_tax_use": "sale",
+                "company_id": self.instance.company_id.id,
+                "price_include_override": "tax_included",
+            }
+        )
+        self.env["shopify.tax.mapping"].create(
+            {
+                "instance_id": self.instance.id,
+                "rate": "0.19",
+                "country_id": self.env.ref("base.de").id,
+                "price_included": True,
+                "tax_id": tax.id,
+            }
+        )
+
+        # quantity, original unit gross, discount allocation, rounded unit
+        # after all discounts, Shopify included VAT for each full line.
+        items = (
+            (1, "1.99", "0.14", "1.85", "0.30"),
+            (1, "51.56", "3.61", "47.95", "7.66"),
+            (2, "11.90", "1.67", "11.07", "3.53"),
+            (2, "17.85", "2.50", "16.60", "5.30"),
+            (1, "13.09", "0.92", "12.17", "1.94"),
+            (1, "17.85", "1.25", "16.60", "2.65"),
+            (1, "17.85", "1.25", "16.60", "2.65"),
+            (2, "11.90", "1.67", "11.07", "3.53"),
+            (1, "14.28", "1.00", "13.28", "2.12"),
+            (1, "23.80", "1.66", "22.14", "3.53"),
+            (1, "11.90", "0.83", "11.07", "1.77"),
+            (1, "19.84", "1.38", "18.46", "2.95"),
+            (1, "2.48", "0.17", "2.31", "0.37"),
+        )
+        old_rounded_total = sum(
+            (
+                Decimal(rounded_unit) * quantity
+                for quantity, _, _, rounded_unit, _ in items
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(old_rounded_total, Decimal("239.91"))
+        payload = self._payload(order_id=1351, total="250.64")
+        payload.update(
+            {
+                "currencyCode": "EUR",
+                "presentmentCurrencyCode": "EUR",
+                "taxesIncluded": True,
+                "shippingAddress": {"countryCodeV2": "DE"},
+                "currentSubtotalPriceSet": self._bag("239.89"),
+                "currentTotalDiscountsSet": self._bag("18.05"),
+                "currentShippingPriceSet": self._bag("10.75"),
+                "currentTotalTaxSet": self._bag("40.02"),
+                "currentTotalPriceSet": self._bag("250.64"),
+            }
+        )
+        lines = []
+        for number, (quantity, unit, discount, rounded, included_tax) in enumerate(
+            items, start=1
+        ):
+            lines.append(
+                {
+                    "id": f"gid://shopify/LineItem/135100{number}",
+                    "name": f"Anonymized product {number}",
+                    "sku": f"BF-CM-{number}",
+                    "quantity": quantity,
+                    "currentQuantity": quantity,
+                    "refundableQuantity": quantity,
+                    "variant": {"id": self.variant_binding.shopify_id},
+                    "product": {"id": self.template_binding.shopify_id},
+                    "originalUnitPriceSet": self._bag(unit),
+                    "discountedUnitPriceAfterAllDiscountsSet": self._bag(rounded),
+                    "discountAllocations": [
+                        {"allocatedAmountSet": self._bag(discount)}
+                    ],
+                    "taxLines": [
+                        {
+                            "title": "DE MwSt",
+                            "rate": "0.19",
+                            "priceSet": self._bag(included_tax),
+                        }
+                    ],
+                }
+            )
+        payload["lineItems"] = {"nodes": lines}
+        payload["shippingLines"] = {
+            "nodes": [
+                {
+                    "id": "gid://shopify/ShippingLine/1351",
+                    "title": "Shipping",
+                    "originalPriceSet": self._bag("10.75"),
+                    "currentDiscountedPriceSet": self._bag("10.75"),
+                    "taxLines": [
+                        {
+                            "title": "DE MwSt",
+                            "rate": "0.19",
+                            "priceSet": self._bag("1.72"),
+                        }
+                    ],
+                }
+            ]
+        }
+
+        normalized = normalize_order_payload(payload)
+        subtotal = sum(
+            (
+                Decimal(line["discounted_total"]["shop"]["amount"])
+                for line in normalized["lines"]
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(subtotal, Decimal("239.89"))
+        self.assertEqual(
+            sum(
+                (
+                    Decimal(item["discount_allocations"][0]["amount"]["shop"]["amount"])
+                    for item in normalized["lines"]
+                ),
+                Decimal("0"),
+            ),
+            Decimal("18.05"),
+        )
+        result = self.order_model._job_import_order(self.instance.id, payload)
+        binding = self.order_model.search(
+            [
+                ("instance_id", "=", self.instance.id),
+                ("shopify_id", "=", "gid://shopify/Order/1351"),
+            ],
+            limit=1,
+        )
+        self.assertTrue(result, binding.error_message)
+        self.assertEqual(binding.state, "synced")
+        product_lines = binding.line_binding_ids.filtered(
+            lambda item: not item.is_shipping
+        )
+        self.assertEqual(len(product_lines), 13)
+        self.assertAlmostEqual(binding.odoo_id.amount_tax, 40.02, places=2)
+        self.assertAlmostEqual(binding.odoo_id.amount_total, 250.64, places=2)
