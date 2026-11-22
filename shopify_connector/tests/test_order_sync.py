@@ -11,6 +11,7 @@ from odoo.sql_db import db_connect
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
 from odoo.addons.queue_job.exception import RetryableJobError
 from odoo.addons.queue_job.tests.common import trap_jobs
+from odoo.addons.shopify_connector.lib.order import normalize_order_payload
 from odoo.addons.shopify_connector.graphql.order import (
     ADDRESS_FIELDS,
     DRAFT_ORDER_BY_ID_QUERY,
@@ -2670,8 +2671,6 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
             ]
         }
 
-        from odoo.addons.shopify_connector.lib.order import normalize_order_payload
-
         normalized = normalize_order_payload(payload)
         subtotal = sum(
             (
@@ -2701,6 +2700,9 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         )
         self.assertTrue(result, binding.error_message)
         self.assertEqual(binding.state, "synced")
-        self.assertEqual(len(binding.line_binding_ids.filtered(lambda b: not b.is_shipping)), 13)
+        product_lines = binding.line_binding_ids.filtered(
+            lambda item: not item.is_shipping
+        )
+        self.assertEqual(len(product_lines), 13)
         self.assertAlmostEqual(binding.odoo_id.amount_tax, 40.02, places=2)
         self.assertAlmostEqual(binding.odoo_id.amount_total, 250.64, places=2)
