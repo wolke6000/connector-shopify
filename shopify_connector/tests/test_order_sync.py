@@ -2807,6 +2807,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                     "fulfillmentLineItem": {"lineItem": {"id": line["id"]}},
                 }
             )
+        refund_total = 10 * sum(line["quantity"] for line in refund_lines)
         update["refunds"] = {
             "nodes": [
                 {
@@ -2824,7 +2825,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                                 "kind": "REFUND",
                                 "status": "PENDING",
                                 "amountSet": self._bag(
-                                    f"{10 * sum(x['quantity'] for x in refund_lines)}.00"
+                                    f"{refund_total}.00"
                                 ),
                             }
                         ]
