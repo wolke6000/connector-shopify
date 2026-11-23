@@ -1812,3 +1812,193 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
         self.assertEqual(len(product_lines), 13)
         self.assertAlmostEqual(binding.odoo_id.amount_tax, 40.02, places=2)
         self.assertAlmostEqual(binding.odoo_id.amount_total, 250.64, places=2)
+
+    # Regression: Shopify #1352 (anonymised). Fulfillment was marked done,
+    # but Shopify subsequently closed a return and restocked all six units.
+    # These expectations intentionally fail against the deployed connector.
+    def _delivered_restock_fixture(self, order_id, quantities=(4, 1, 1)):
+        self.instance.write({
+            "order_confirmation_policy": "auto",
+            "order_invoicing_policy": "manual",
+            "fulfillment_export_enabled": False,
+        })
+        warehouse = self.env["stock.warehouse"].search(
+            [("company_id", "=", self.instance.company_id.id)], limit=1
+        )
+        self.assertTrue(warehouse)
+        total_quantity = sum(quantities)
+        self.env["stock.quant"]._update_available_quantity(
+            self.goods, warehouse.lot_stock_id, total_quantity
+        )
+        payload = self._payload(
+            order_id=order_id,
+            quantity=quantities[0],
+            total=f"{10 * total_quantity}.00",
+            displayFinancialStatus="PAID",
+        )
+        lines = []
+        for index, quantity in enumerate(quantities, start=1):
+            line = dict(payload["lineItems"]["nodes"][0])
+            line.update({
+                "id": f"gid://shopify/LineItem/{order_id}0{index}",
+                "name": f"Anonymous stock item {index}",
+                "sku": f"REGRESSION-{order_id}-{index}",
+                "quantity": quantity,
+                "currentQuantity": quantity,
+                "refundableQuantity": quantity,
+                "variant": {"id": self.goods_variant_binding.shopify_id},
+                "product": {"id": self.goods_variant_binding.template_binding_id.shopify_id},
+            })
+            lines.append(line)
+        payload["lineItems"] = {"nodes": lines}
+        binding_id = self.order_model._job_import_order(self.instance.id, payload)
+        binding = self.order_model.browse(binding_id)
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(binding.odoo_id.state, "sale")
+        self.assertFalse(binding.odoo_id.invoice_ids)
+        picking = binding.odoo_id.picking_ids.filtered(
+            lambda item: item.picking_type_id.code == "outgoing"
+        )
+        self.assertEqual(len(picking), 1)
+        picking.action_assign()
+        for move in picking.move_ids:
+            move.quantity = move.product_uom_qty
+        picking.button_validate()
+        self.assertEqual(picking.state, "done")
+        self.assertEqual(
+            sum(picking.move_ids.mapped("quantity")), total_quantity
+        )
+        return binding, picking, payload
+
+    def _delivered_restock_update(
+        self, payload, *, restock_type="RETURN", restocked=True
+    ):
+        from copy import deepcopy
+
+        update = deepcopy(payload)
+        update["updatedAt"] = "2026-01-13T10:00:00Z"
+        update["displayFulfillmentStatus"] = "FULFILLED"
+        update["currentSubtotalPriceSet"] = self._bag("0.00")
+        update["currentTotalPriceSet"] = self._bag("0.00")
+        for line in update["lineItems"]["nodes"]:
+            line["currentQuantity"] = 0
+            line["refundableQuantity"] = 0
+        refund_lines = []
+        return_lines = []
+        for index, line in enumerate(update["lineItems"]["nodes"], start=1):
+            quantity = line["quantity"]
+            refund_lines.append({
+                "id": f"gid://shopify/RefundLineItem/{update['name'][1:]}0{index}",
+                "lineItem": {"id": line["id"]},
+                "quantity": quantity,
+                "restockType": restock_type,
+                "restocked": restocked,
+                "subtotalSet": self._bag(f"{10 * quantity}.00"),
+                "totalTaxSet": self._bag("0.00"),
+            })
+            return_lines.append({
+                "id": f"gid://shopify/ReturnLineItem/{update['name'][1:]}0{index}",
+                "quantity": quantity,
+                "refundableQuantity": 0,
+                "refundedQuantity": quantity,
+                "fulfillmentLineItem": {"lineItem": {"id": line["id"]}},
+            })
+        update["refunds"] = {
+            "nodes": [{
+                "id": f"gid://shopify/Refund/{update['name'][1:]}",
+                "createdAt": "2026-01-13T09:59:00Z",
+                "totalRefundedSet": self._bag("0.00"),
+                "refundLineItems": {"nodes": refund_lines},
+                "refundShippingLines": {"nodes": []},
+                "orderAdjustments": {"nodes": []},
+                "transactions": {
+                    "nodes": [{
+                        "id": f"gid://shopify/OrderTransaction/{update['name'][1:]}",
+                        "gateway": "shopify_payments",
+                        "kind": "REFUND",
+                        "status": "PENDING",
+                        "amountSet": self._bag(
+                            f"{10 * sum(x['quantity'] for x in refund_lines)}.00"
+                        ),
+                    }]
+                },
+            }]
+        }
+        update["returns"] = {
+            "nodes": [{
+                "id": f"gid://shopify/Return/{update['name'][1:]}",
+                "name": f"RETURN-{update['name'][1:]}",
+                "status": "CLOSED",
+                "createdAt": "2026-01-13T09:50:00Z",
+                "closedAt": "2026-01-13T10:00:00Z",
+                "totalQuantity": sum(line["quantity"] for line in refund_lines),
+                "returnLineItems": {"nodes": return_lines},
+                "exchangeLineItems": {"nodes": []},
+            }]
+        }
+        return update
+
+    def _linked_stock_returns(self, picking):
+        return self.env["stock.move"].search([
+            ("origin_returned_move_id", "in", picking.move_ids.ids),
+        ])
+
+    def test_delivered_shopify_restock_imports_and_reverses_stock_once(self):
+        """#1352: restocked RETURN, closed return, pending monetary refund."""
+        binding, picking, original = self._delivered_restock_fixture(1352001)
+        updated = self._delivered_restock_update(original)
+        result = self.order_model._job_import_order(self.instance.id, updated)
+
+        self.assertEqual(result, binding.id, binding.error_message)
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(binding.return_binding_ids.mapped("return_status"), ["CLOSED"])
+        self.assertEqual(len(binding.refund_binding_ids), 1)
+        self.assertEqual(binding.refund_binding_ids.state, "synced")
+        self.assertFalse(binding.odoo_id.invoice_ids)
+        self.assertEqual(picking.state, "done")
+        returned_moves = self._linked_stock_returns(picking)
+        self.assertEqual(sum(returned_moves.mapped("quantity")), 6)
+        self.assertTrue(all(move.state == "done" for move in returned_moves))
+
+        # A newer webhook containing the same Shopify refund must be harmless.
+        updated["updatedAt"] = "2026-01-14T10:00:00Z"
+        result = self.order_model._job_import_order(self.instance.id, updated)
+        self.assertEqual(result, binding.id, binding.error_message)
+        self.assertEqual(len(binding.refund_binding_ids), 1)
+        self.assertEqual(sum(self._linked_stock_returns(picking).mapped("quantity")), 6)
+
+    def test_delivered_refund_without_restock_does_not_increase_stock(self):
+        binding, picking, original = self._delivered_restock_fixture(
+            1352002, quantities=(1,)
+        )
+        updated = self._delivered_restock_update(
+            original, restock_type="NO_RESTOCK", restocked=False
+        )
+        result = self.order_model._job_import_order(self.instance.id, updated)
+
+        self.assertEqual(result, binding.id, binding.error_message)
+        self.assertEqual(binding.state, "synced", binding.error_message)
+        self.assertEqual(len(binding.refund_binding_ids), 1)
+        self.assertFalse(binding.refund_binding_ids.restock_requested)
+        self.assertFalse(self._linked_stock_returns(picking))
+        self.assertEqual(picking.state, "done")
+
+    def test_pending_refund_does_not_block_confirmed_shopify_restock(self):
+        """A pending payment transaction is not a pending stock receipt."""
+        binding, picking, original = self._delivered_restock_fixture(
+            1352003, quantities=(1,)
+        )
+        updated = self._delivered_restock_update(original)
+        transactions = updated["refunds"]["nodes"][0]["transactions"]["nodes"]
+        self.assertEqual(transactions[0]["status"], "PENDING")
+        self.assertEqual(
+            updated["refunds"]["nodes"][0]["totalRefundedSet"]["shopMoney"]["amount"],
+            "0.00",
+        )
+        result = self.order_model._job_import_order(self.instance.id, updated)
+
+        self.assertEqual(result, binding.id, binding.error_message)
+        returned = self._linked_stock_returns(picking)
+        self.assertEqual(sum(returned.mapped("quantity")), 1)
+        self.assertTrue(all(move.state == "done" for move in returned))
+        self.assertFalse(binding.odoo_id.invoice_ids)
