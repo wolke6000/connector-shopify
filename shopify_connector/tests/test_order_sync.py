@@ -2824,9 +2824,7 @@ class TestShopifyOrderSync(AccountTestInvoicingCommon):
                                 "gateway": "shopify_payments",
                                 "kind": "REFUND",
                                 "status": "PENDING",
-                                "amountSet": self._bag(
-                                    f"{refund_total}.00"
-                                ),
+                                "amountSet": self._bag(f"{refund_total}.00"),
                             }
                         ]
                     },
